@@ -29,3 +29,12 @@ assert_eq!(desc.get("Depends"), Some("R (>= 3.0.0"));
 
 desc.insert("License", "MIT");
 ```
+
+```rust
+use r_description::Version;
+
+let v1 = Version::parse("1.2.3-alpha").unwrap();
+let v2 = Version::parse("1.2.3").unwrap();
+assert!(v1 < v2);
+
+```
