@@ -1,346 +1,406 @@
-//! Lossy parser for deb822 format.
-//!
-//! This parser is lossy in the sense that it will discard whitespace and comments
-//! in the input.
-use crate::lex::SyntaxKind;
+/// A library for parsing and manipulating R DESCRIPTION files.
+///
+/// See https://r-pkgs.org/description.html and https://cran.r-project.org/doc/manuals/R-exts.html
+/// for more information
+///
+/// See the ``lossless`` module for a lossless parser that is
+/// forgiving in the face of errors and preserves formatting while editing
+/// at the expense of a more complex API.
+use deb822_lossless::{FromDeb822, FromDeb822Paragraph, ToDeb822, ToDeb822Paragraph};
 
-/// Error type for the parser.
-#[derive(Debug)]
-pub enum Error {
-    /// An unexpected token was encountered.
-    UnexpectedToken(SyntaxKind, String),
+use crate::RCode;
+use std::iter::Peekable;
 
-    /// Unexpected end-of-file.
-    UnexpectedEof,
+use crate::relations::SyntaxKind::*;
+use crate::relations::{lex, SyntaxKind, VersionConstraint};
+use crate::version::Version;
 
-    /// Expected end-of-file.
-    ExpectedEof,
-
-    /// IO error.
-    Io(std::io::Error),
-}
-
-impl From<std::io::Error> for Error {
-    fn from(e: std::io::Error) -> Self {
-        Self::Io(e)
-    }
-}
-
-impl std::fmt::Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
-        match self {
-            Self::UnexpectedToken(_k, t) => write!(f, "Unexpected token: {}", t),
-            Self::UnexpectedEof => f.write_str("Unexpected end-of-file"),
-            Self::Io(e) => write!(f, "IO error: {}", e),
-            Self::ExpectedEof => f.write_str("Expected end-of-file"),
+fn serialize_url_list(urls: &[url::Url]) -> String {
+    let mut s = String::new();
+    for (i, url) in urls.iter().enumerate() {
+        if i > 0 {
+            s.push_str(", ");
         }
+        s.push_str(url.as_str());
     }
+    s
 }
 
-/// A field in a deb822 paragraph.
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub struct Field {
-    /// The name of the field.
+fn deserialize_url_list(s: &str) -> Result<Vec<url::Url>, String> {
+    s.split(',')
+        .map(|s| url::Url::parse(s.trim()))
+        .collect::<Result<Vec<_>, url::ParseError>>()
+        .map_err(|e| e.to_string())
+}
+
+#[derive(FromDeb822, ToDeb822, Debug, PartialEq, Eq)]
+pub struct RDescription {
+    #[deb822(field = "Package")]
     pub name: String,
 
-    /// The value of the field.
-    pub value: String,
+    #[deb822(field = "Description")]
+    pub description: String,
+
+    #[deb822(field = "Title")]
+    pub title: String,
+
+    #[deb822(field = "Maintainer")]
+    pub maintainer: Option<String>,
+
+    #[deb822(field = "Author")]
+    /// Who wrote the the package
+    pub author: Option<String>,
+
+    // 'Authors@R' is a special field that can contain R code
+    // that is evaluated to get the authors and maintainers.
+    #[deb822(field = "Authors@R")]
+    pub authors: Option<RCode>,
+
+    #[deb822(field = "Version")]
+    pub version: Version,
+
+    /// If the DESCRIPTION file is not written in pure ASCII, the encoding
+    /// field must be used to specify the encoding.
+    #[deb822(field = "Encoding")]
+    pub encoding: Option<String>,
+
+    #[deb822(field = "License")]
+    pub license: String,
+
+    #[deb822(field = "URL", serialize_with = serialize_url_list, deserialize_with = deserialize_url_list)]
+    // TODO: parse this as a list of URLs, separated by commas
+    pub url: Option<Vec<url::Url>>,
+
+    #[deb822(field = "BugReports")]
+    pub bug_reports: Option<String>,
+
+    #[deb822(field = "Imports")]
+    pub imports: Option<Relations>,
+
+    #[deb822(field = "Suggests")]
+    pub suggests: Option<Relations>,
+
+    #[deb822(field = "Depends")]
+    pub depends: Option<Relations>,
+
+    #[deb822(field = "LinkingTo")]
+    pub linking_to: Option<Relations>,
+
+    #[deb822(field = "LazyData")]
+    pub lazy_data: Option<String>,
+
+    #[deb822(field = "Collate")]
+    pub collate: Option<String>,
+
+    #[deb822(field = "VignetteBuilder")]
+    pub vignette_builder: Option<String>,
+
+    #[deb822(field = "SystemRequirements")]
+    pub system_requirements: Option<String>,
+
+    #[deb822(field = "Date")]
+    /// The release date of the current version of the package.
+    /// Strongly recommended to use the ISO 8601 format: YYYY-MM-DD
+    pub date: Option<String>,
+
+    #[deb822(field = "Language")]
+    /// Indicates the package documentation is not in English.
+    /// This should be a comma-separated list of IETF language
+    /// tags as defined by RFC5646
+    pub language: Option<String>,
 }
 
-/// A deb822 paragraph.
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub struct Paragraph {
-    /// Fields in the paragraph.
-    pub fields: Vec<Field>,
+/// A relation entry in a relationship field.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Relation {
+    /// Package name.
+    pub name: String,
+    /// Version constraint and version.
+    pub version: Option<(VersionConstraint, Version)>,
 }
 
-impl Paragraph {
-    /// Get the value of a field by name.
-    ///
-    /// Returns `None` if the field does not exist.
-    pub fn get(&self, name: &str) -> Option<&str> {
-        for field in &self.fields {
-            if field.name == name {
-                return Some(&field.value);
-            }
+impl Default for Relation {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Relation {
+    /// Create an empty relation.
+    pub fn new() -> Self {
+        Self {
+            name: String::new(),
+            version: None,
         }
-        None
     }
 
-    /// Check if the paragraph is empty.
-    pub fn is_empty(&self) -> bool {
-        self.fields.is_empty()
-    }
-
-    /// Return the number of fields in the paragraph.
-    pub fn len(&self) -> usize {
-        self.fields.len()
-    }
-
-    /// Iterate over the fields in the paragraph.
-    pub fn iter(&self) -> impl Iterator<Item = (&str, &str)> {
-        self.fields
-            .iter()
-            .map(|field| (field.name.as_str(), field.value.as_str()))
-    }
-
-    /// Iterate over the fields in the paragraph, mutably.
-    pub fn iter_mut(&mut self) -> impl Iterator<Item = (&str, &mut String)> {
-        self.fields
-            .iter_mut()
-            .map(|field| (field.name.as_str(), &mut field.value))
-    }
-
-    /// Insert a field into the paragraph.
+    /// Check if this entry is satisfied by the given package versions.
     ///
-    /// If a field with the same name already exists, a
-    /// new field will be added.
-    pub fn insert(&mut self, name: &str, value: &str) {
-        self.fields.push(Field {
-            name: name.to_string(),
-            value: value.to_string(),
-        });
-    }
-
-    /// Set the value of a field.
+    /// # Arguments
+    /// * `package_version` - A function that returns the version of a package.
     ///
-    /// If a field with the same name already exists, its value
-    /// will be updated.
-    pub fn set(&mut self, name: &str, value: &str) {
-        for field in &mut self.fields {
-            if field.name == name {
-                field.value = value.to_string();
-                return;
+    /// # Example
+    /// ```
+    /// use r_description::lossy::Relation;
+    /// use r_description::version::Version;
+    /// let entry: Relation = "cli (>= 2.0)".parse().unwrap();
+    /// assert!(entry.satisfied_by(|name: &str| -> Option<Version> {
+    ///    match name {
+    ///    "cli" => Some("2.0".parse().unwrap()),
+    ///    _ => None
+    /// }}));
+    /// ```
+    pub fn satisfied_by(&self, package_version: impl crate::relations::VersionLookup) -> bool {
+        let actual = package_version.lookup_version(self.name.as_str());
+        if let Some((vc, version)) = &self.version {
+            if let Some(actual) = actual {
+                match vc {
+                    VersionConstraint::GreaterThanEqual => actual.as_ref() >= version,
+                    VersionConstraint::LessThanEqual => actual.as_ref() <= version,
+                    VersionConstraint::Equal => actual.as_ref() == version,
+                    VersionConstraint::GreaterThan => actual.as_ref() > version,
+                    VersionConstraint::LessThan => actual.as_ref() < version,
+                }
+            } else {
+                false
             }
-        }
-        self.insert(name, value);
-    }
-
-    /// Remove a field from the paragraph.
-    pub fn remove(&mut self, name: &str) {
-        self.fields.retain(|field| field.name != name);
-    }
-}
-
-impl std::fmt::Display for Field {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        let lines = self.value.lines().collect::<Vec<_>>();
-        if lines.len() > 1 {
-            writeln!(f, "{}:", self.name)?;
-            for line in lines {
-                writeln!(f, " {}", line)?;
-            }
-            Ok(())
         } else {
-            writeln!(f, "{}: {}", self.name, self.value)
+            actual.is_some()
         }
     }
 }
 
-impl std::fmt::Display for Paragraph {
+impl std::fmt::Display for Relation {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        for field in &self.fields {
-            f.write_str(&field.to_string())?;
+        write!(f, "{}", self.name)?;
+        if let Some((constraint, version)) = &self.version {
+            write!(f, " ({} {})", constraint, version)?;
         }
         Ok(())
     }
 }
 
-impl std::fmt::Display for Deb822 {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        for (i, paragraph) in self.0.iter().enumerate() {
-            if i > 0 {
-                writeln!(f)?;
-            }
-            write!(f, "{}", paragraph)?;
-        }
-        Ok(())
+#[cfg(feature = "serde")]
+impl<'de> serde::Deserialize<'de> for Relation {
+    fn deserialize<D>(deserializer: D) -> Result<Relation, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        s.parse().map_err(serde::de::Error::custom)
     }
 }
 
-impl std::str::FromStr for Paragraph {
-    type Err = Error;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let doc: Deb822 = s.parse().map_err(|_| Error::ExpectedEof)?;
-        if doc.is_empty() {
-            Err(Error::UnexpectedEof)
-        } else if doc.len() > 1 {
-            Err(Error::ExpectedEof)
-        } else {
-            Ok(doc.0.into_iter().next().unwrap())
-        }
+#[cfg(feature = "serde")]
+impl serde::Serialize for Relation {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.to_string().serialize(serializer)
     }
 }
 
-impl From<Vec<(String, String)>> for Paragraph {
-    fn from(fields: Vec<(String, String)>) -> Self {
-        fields.into_iter().collect()
+/// A collection of relation entries in a relationship field.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Relations(pub Vec<Relation>);
+
+impl std::ops::Index<usize> for Relations {
+    type Output = Relation;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.0[index]
     }
 }
 
-impl FromIterator<(String, String)> for Paragraph {
-    fn from_iter<T: IntoIterator<Item = (String, String)>>(iter: T) -> Self {
-        let fields = iter
-            .into_iter()
-            .map(|(name, value)| Field { name, value })
-            .collect();
-        Paragraph { fields }
+impl std::ops::IndexMut<usize> for Relations {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        &mut self.0[index]
     }
 }
 
-/// A deb822 document.
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub struct Deb822(pub Vec<Paragraph>);
+impl FromIterator<Relation> for Relations {
+    fn from_iter<I: IntoIterator<Item = Relation>>(iter: I) -> Self {
+        Self(iter.into_iter().collect())
+    }
+}
 
-impl Deb822 {
-    /// Number of paragraphs in the document.
+impl Default for Relations {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Relations {
+    /// Create an empty relations.
+    pub fn new() -> Self {
+        Self(Vec::new())
+    }
+
+    /// Remove an entry from the relations.
+    pub fn remove(&mut self, index: usize) {
+        self.0.remove(index);
+    }
+
+    /// Iterate over the entries in the relations.
+    pub fn iter(&self) -> impl Iterator<Item = &Relation> {
+        self.0.iter()
+    }
+
+    /// Number of entries in the relations.
     pub fn len(&self) -> usize {
         self.0.len()
     }
 
-    /// Check if the document is empty.
+    /// Check if the relations are empty.
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
 
-    /// Iterate over the paragraphs in the document.
-    pub fn iter(&self) -> impl Iterator<Item = &Paragraph> {
-        self.0.iter()
-    }
-
-    /// Iterate over the paragraphs in the document, mutably.
-    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut Paragraph> {
-        self.0.iter_mut()
-    }
-
-    /// Read from a reader.
-    pub fn from_reader<R: std::io::Read>(mut r: R) -> Result<Self, Error> {
-        let mut buf = String::new();
-        r.read_to_string(&mut buf)?;
-        buf.parse()
+    /// Check if the relations are satisfied by the given package versions.
+    pub fn satisfied_by(
+        &self,
+        package_version: impl crate::relations::VersionLookup + Copy,
+    ) -> bool {
+        self.0.iter().all(|r| r.satisfied_by(package_version))
     }
 }
 
-impl std::str::FromStr for Deb822 {
-    type Err = Error;
+impl std::fmt::Display for Relations {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        for (i, relation) in self.0.iter().enumerate() {
+            if i > 0 {
+                f.write_str(", ")?;
+            }
+            write!(f, "{}", relation)?;
+        }
+        Ok(())
+    }
+}
+
+impl std::str::FromStr for Relation {
+    type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let lexed = crate::lex::lex(s);
-        let mut tokens = lexed.iter().peekable();
+        let tokens = lex(s);
+        let mut tokens = tokens.into_iter().peekable();
 
-        let mut paragraphs = Vec::new();
-        let mut current_paragraph = Vec::new();
-
-        while let Some((k, t)) = tokens.next() {
-            match *k {
-                SyntaxKind::EMPTY_LINE
-                | SyntaxKind::PARAGRAPH
-                | SyntaxKind::ROOT
-                | SyntaxKind::ENTRY => unreachable!(),
-                SyntaxKind::INDENT | SyntaxKind::COLON | SyntaxKind::ERROR => {
-                    return Err(Error::UnexpectedToken(*k, t.to_string()));
-                }
-                SyntaxKind::WHITESPACE => {
-                    // ignore whitespace
-                }
-                SyntaxKind::KEY => {
-                    current_paragraph.push(Field {
-                        name: t.to_string(),
-                        value: String::new(),
-                    });
-
-                    match tokens.next() {
-                        Some((SyntaxKind::COLON, _)) => {}
-                        Some((k, t)) => {
-                            return Err(Error::UnexpectedToken(*k, t.to_string()));
-                        }
-                        None => {
-                            return Err(Error::UnexpectedEof);
-                        }
-                    }
-
-                    while tokens.peek().map(|(k, _)| *k) == Some(SyntaxKind::WHITESPACE) {
+        fn eat_whitespace(tokens: &mut Peekable<impl Iterator<Item = (SyntaxKind, String)>>) {
+            while let Some((k, _)) = tokens.peek() {
+                match k {
+                    WHITESPACE | NEWLINE => {
                         tokens.next();
                     }
-
-                    for (k, t) in tokens.by_ref() {
-                        match k {
-                            SyntaxKind::VALUE => {
-                                current_paragraph.last_mut().unwrap().value = t.to_string();
-                            }
-                            SyntaxKind::NEWLINE => {
-                                break;
-                            }
-                            _ => return Err(Error::UnexpectedToken(*k, t.to_string())),
-                        }
-                    }
-
-                    current_paragraph.last_mut().unwrap().value.push('\n');
-
-                    // while the next line starts with INDENT, it's a continuation of the value
-                    while tokens.peek().map(|(k, _)| *k) == Some(SyntaxKind::INDENT) {
-                        tokens.next();
-                        loop {
-                            match tokens.peek() {
-                                Some((SyntaxKind::VALUE, t)) => {
-                                    current_paragraph.last_mut().unwrap().value.push_str(t);
-                                    tokens.next();
-                                }
-                                Some((SyntaxKind::COMMENT, _)) => {
-                                    // ignore comments
-                                    tokens.next();
-                                }
-                                Some((SyntaxKind::NEWLINE, n)) => {
-                                    current_paragraph.last_mut().unwrap().value.push_str(n);
-                                    tokens.next();
-                                    break;
-                                }
-                                Some((SyntaxKind::KEY, _)) => {
-                                    break;
-                                }
-                                Some((k, _)) => {
-                                    return Err(Error::UnexpectedToken(*k, t.to_string()));
-                                }
-                                None => {
-                                    break;
-                                }
-                            }
-                        }
-                    }
-
-                    // Trim the trailing newline
-                    assert_eq!(
-                        current_paragraph.last_mut().unwrap().value.pop(),
-                        Some('\n')
-                    );
-                }
-                SyntaxKind::VALUE => {
-                    return Err(Error::UnexpectedToken(*k, t.to_string()));
-                }
-                SyntaxKind::COMMENT => {
-                    for (k, _) in tokens.by_ref() {
-                        if *k == SyntaxKind::NEWLINE {
-                            break;
-                        }
-                    }
-                }
-                SyntaxKind::NEWLINE => {
-                    if !current_paragraph.is_empty() {
-                        paragraphs.push(Paragraph {
-                            fields: current_paragraph,
-                        });
-                        current_paragraph = Vec::new();
-                    }
+                    _ => break,
                 }
             }
         }
-        if !current_paragraph.is_empty() {
-            paragraphs.push(Paragraph {
-                fields: current_paragraph,
-            });
+
+        let name = match tokens.next() {
+            Some((IDENT, name)) => name,
+            _ => return Err("Expected package name".to_string()),
+        };
+
+        eat_whitespace(&mut tokens);
+
+        let version = if let Some((L_PARENS, _)) = tokens.peek() {
+            tokens.next();
+            eat_whitespace(&mut tokens);
+            let mut constraint = String::new();
+            while let Some((kind, t)) = tokens.peek() {
+                match kind {
+                    EQUAL | L_ANGLE | R_ANGLE => {
+                        constraint.push_str(t);
+                        tokens.next();
+                    }
+                    _ => break,
+                }
+            }
+            let constraint = constraint.parse()?;
+            eat_whitespace(&mut tokens);
+            // Read IDENT and COLON tokens until we see R_PARENS
+            let version_string = match tokens.next() {
+                Some((IDENT, s)) => s,
+                _ => return Err("Expected version string".to_string()),
+            };
+            let version: Version = version_string.parse().map_err(|e: String| e.to_string())?;
+            eat_whitespace(&mut tokens);
+            if let Some((R_PARENS, _)) = tokens.next() {
+            } else {
+                return Err(format!("Expected ')', found {:?}", tokens.next()));
+            }
+            Some((constraint, version))
+        } else {
+            None
+        };
+
+        eat_whitespace(&mut tokens);
+
+        if let Some((kind, _)) = tokens.next() {
+            return Err(format!("Unexpected token: {:?}", kind));
         }
-        Ok(Deb822(paragraphs))
+
+        Ok(Relation { name, version })
+    }
+}
+
+impl std::str::FromStr for Relations {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let mut relations = Vec::new();
+        if s.is_empty() {
+            return Ok(Relations(relations));
+        }
+        for relation in s.split(',') {
+            let relation = relation.trim();
+            if relation.is_empty() {
+                // Ignore empty entries.
+                continue;
+            }
+            relations.push(relation.parse()?);
+        }
+        Ok(Relations(relations))
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de> serde::Deserialize<'de> for Relations {
+    fn deserialize<D>(deserializer: D) -> Result<Relations, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        s.parse().map_err(serde::de::Error::custom)
+    }
+}
+
+#[cfg(feature = "serde")]
+impl serde::Serialize for Relations {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.to_string().serialize(serializer)
+    }
+}
+
+impl std::str::FromStr for RDescription {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let para: deb822_lossless::Paragraph = s
+            .parse()
+            .map_err(|e: deb822_lossless::ParseError| e.to_string())?;
+        Self::from_paragraph(&para)
+    }
+}
+
+impl std::fmt::Display for RDescription {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        let para: deb822_lossless::lossy::Paragraph = self.to_paragraph();
+        f.write_str(&para.to_string())?;
+        Ok(())
     }
 }
 
@@ -350,91 +410,199 @@ mod tests {
 
     #[test]
     fn test_parse() {
-        let input = r#"Package: hello
-Version: 2.10
-Description: A program that says hello
- Some more text
+        let s = r###"Package: mypackage
+Title: What the Package Does (One Line, Title Case)
+Version: 0.0.0.9000
+Authors@R: 
+    person("First", "Last", , "first.last@example.com", role = c("aut", "cre"),
+           comment = c(ORCID = "YOUR-ORCID-ID"))
+Description: What the package does (one paragraph).
+License: `use_mit_license()`, `use_gpl3_license()` or friends to pick a
+    license
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.3.2
+"###;
+        let desc: RDescription = s.parse().unwrap();
 
-Package: world
-Version: 1.0
-Description: A program that says world
- And some more text
-Another-Field: value
-
-# A comment
-
-"#;
-
-        let mut deb822: Deb822 = input.parse().unwrap();
+        assert_eq!(desc.name, "mypackage".to_string());
         assert_eq!(
-            deb822,
-            Deb822(vec![
-                Paragraph {
-                    fields: vec![
-                        Field {
-                            name: "Package".to_string(),
-                            value: "hello".to_string(),
-                        },
-                        Field {
-                            name: "Version".to_string(),
-                            value: "2.10".to_string(),
-                        },
-                        Field {
-                            name: "Description".to_string(),
-                            value: "A program that says hello\nSome more text".to_string(),
-                        },
-                    ],
-                },
-                Paragraph {
-                    fields: vec![
-                        Field {
-                            name: "Package".to_string(),
-                            value: "world".to_string(),
-                        },
-                        Field {
-                            name: "Version".to_string(),
-                            value: "1.0".to_string(),
-                        },
-                        Field {
-                            name: "Description".to_string(),
-                            value: "A program that says world\nAnd some more text".to_string(),
-                        },
-                        Field {
-                            name: "Another-Field".to_string(),
-                            value: "value".to_string(),
-                        },
-                    ],
-                },
-            ])
+            desc.title,
+            "What the Package Does (One Line, Title Case)".to_string()
         );
-        assert_eq!(deb822.len(), 2);
-        assert!(!deb822.is_empty());
-        assert_eq!(deb822.iter().count(), 2);
-
-        let para = deb822.iter().next().unwrap();
-        assert_eq!(para.get("Package"), Some("hello"));
-        assert_eq!(para.get("Version"), Some("2.10"));
+        assert_eq!(desc.version, "0.0.0.9000".parse().unwrap());
         assert_eq!(
-            para.get("Description"),
-            Some("A program that says hello\nSome more text")
+            desc.authors,
+            Some(RCode(
+                r#"person("First", "Last", , "first.last@example.com", role = c("aut", "cre"),
+comment = c(ORCID = "YOUR-ORCID-ID"))"#
+                    .to_string()
+            ))
         );
-        assert_eq!(para.get("Another-Field"), None);
-        assert!(!para.is_empty());
-        assert_eq!(para.len(), 3);
         assert_eq!(
-            para.iter().collect::<Vec<_>>(),
-            vec![
-                ("Package", "hello"),
-                ("Version", "2.10"),
-                ("Description", "A program that says hello\nSome more text"),
-            ]
+            desc.description,
+            "What the package does (one paragraph).".to_string()
         );
-        let para = deb822.iter_mut().next().unwrap();
-        para.insert("Another-Field", "value");
-        assert_eq!(para.get("Another-Field"), Some("value"));
+        assert_eq!(
+            desc.license,
+            "`use_mit_license()`, `use_gpl3_license()` or friends to pick a\nlicense".to_string()
+        );
+        assert_eq!(desc.encoding, Some("UTF-8".to_string()));
 
-        let mut newpara = Paragraph { fields: vec![] };
-        newpara.insert("Package", "new");
-        assert_eq!(newpara.to_string(), "Package: new\n");
+        assert_eq!(
+            desc.to_string(),
+            r###"Package: mypackage
+Description: What the package does (one paragraph).
+Title: What the Package Does (One Line, Title Case)
+Authors@R:
+ person("First", "Last", , "first.last@example.com", role = c("aut", "cre"),
+ comment = c(ORCID = "YOUR-ORCID-ID"))
+Version: 0.0.0.9000
+Encoding: UTF-8
+License:
+ `use_mit_license()`, `use_gpl3_license()` or friends to pick a
+ license
+"###
+        );
+    }
+
+    #[test]
+    fn test_parse_dplyr() {
+        let s = include_str!("../testdata/dplyr.desc");
+        let desc: RDescription = s.parse().unwrap();
+
+        assert_eq!(desc.name, "dplyr".to_string());
+    }
+
+    #[test]
+    fn test_parse_relations() {
+        let input = "cli";
+        let parsed: Relations = input.parse().unwrap();
+        assert_eq!(parsed.to_string(), input);
+        assert_eq!(parsed.len(), 1);
+        let relation = &parsed[0];
+        assert_eq!(relation.to_string(), "cli");
+        assert_eq!(relation.version, None);
+
+        let input = "cli (>= 0.20.21)";
+        let parsed: Relations = input.parse().unwrap();
+        assert_eq!(parsed.to_string(), input);
+        assert_eq!(parsed.len(), 1);
+        let relation = &parsed[0];
+        assert_eq!(relation.to_string(), "cli (>= 0.20.21)");
+        assert_eq!(
+            relation.version,
+            Some((
+                VersionConstraint::GreaterThanEqual,
+                "0.20.21".parse().unwrap()
+            ))
+        );
+    }
+
+    #[test]
+    fn test_multiple() {
+        let input = "cli (>= 0.20.21), cli (<< 0.21)";
+        let parsed: Relations = input.parse().unwrap();
+        assert_eq!(parsed.to_string(), input);
+        assert_eq!(parsed.len(), 2);
+        let relation = &parsed[0];
+        assert_eq!(relation.to_string(), "cli (>= 0.20.21)");
+        assert_eq!(
+            relation.version,
+            Some((
+                VersionConstraint::GreaterThanEqual,
+                "0.20.21".parse().unwrap()
+            ))
+        );
+        let relation = &parsed[1];
+        assert_eq!(relation.to_string(), "cli (<< 0.21)");
+        assert_eq!(
+            relation.version,
+            Some((VersionConstraint::LessThan, "0.21".parse().unwrap()))
+        );
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn test_serde_relations() {
+        let input = "cli (>= 0.20.21), cli (<< 0.21)";
+        let parsed: Relations = input.parse().unwrap();
+        let serialized = serde_json::to_string(&parsed).unwrap();
+        assert_eq!(serialized, r#""cli (>= 0.20.21), cli (<< 0.21)""#);
+        let deserialized: Relations = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(deserialized, parsed);
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn test_serde_relation() {
+        let input = "cli (>= 0.20.21)";
+        let parsed: Relation = input.parse().unwrap();
+        let serialized = serde_json::to_string(&parsed).unwrap();
+        assert_eq!(serialized, r#""cli (>= 0.20.21)""#);
+        let deserialized: Relation = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(deserialized, parsed);
+    }
+
+    #[test]
+    fn test_relations_is_empty() {
+        let input = "cli (>= 0.20.21)";
+        let parsed: Relations = input.parse().unwrap();
+        assert!(!parsed.is_empty());
+        let input = "";
+        let parsed: Relations = input.parse().unwrap();
+        assert!(parsed.is_empty());
+    }
+
+    #[test]
+    fn test_relations_len() {
+        let input = "cli (>= 0.20.21), cli (<< 0.21)";
+        let parsed: Relations = input.parse().unwrap();
+        assert_eq!(parsed.len(), 2);
+    }
+
+    #[test]
+    fn test_relations_remove() {
+        let input = "cli (>= 0.20.21), cli (<< 0.21)";
+        let mut parsed: Relations = input.parse().unwrap();
+        parsed.remove(1);
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed.to_string(), "cli (>= 0.20.21)");
+    }
+
+    #[test]
+    fn test_relations_satisfied_by() {
+        let input = "cli (>= 0.20.21), cli (<< 0.21)";
+        let parsed: Relations = input.parse().unwrap();
+        assert!(parsed.satisfied_by(|name: &str| -> Option<Version> {
+            match name {
+                "cli" => Some("0.20.21".parse().unwrap()),
+                _ => None,
+            }
+        }));
+        assert!(!parsed.satisfied_by(|name: &str| -> Option<Version> {
+            match name {
+                "cli" => Some("0.21".parse().unwrap()),
+                _ => None,
+            }
+        }));
+    }
+
+    #[test]
+    fn test_relation_satisfied_by() {
+        let input = "cli (>= 0.20.21)";
+        let parsed: Relation = input.parse().unwrap();
+        assert!(parsed.satisfied_by(|name: &str| -> Option<Version> {
+            match name {
+                "cli" => Some("0.20.21".parse().unwrap()),
+                _ => None,
+            }
+        }));
+        assert!(!parsed.satisfied_by(|name: &str| -> Option<Version> {
+            match name {
+                "cli" => Some("0.20.20".parse().unwrap()),
+                _ => None,
+            }
+        }));
     }
 }

@@ -1,64 +1,31 @@
-Parsers and editors for deb822 style files
-==========================================
+# R DESCRIPTION parser
 
-This crate contains parsers and editors for RFC822 style file as used in
-Debian.
+This crate provides a parser and editor for the `DESCRIPTION` files used in R
+packages.  Since the format is based on Debian control files, the parser
+uses the ``deb822_lossless`` crate for the lower layer parsing.
 
-Three related crates that build on this one are:
+See <https://r-pkgs.org/description.html> and
+<https://cran.r-project.org/doc/manuals/R-exts.html> for more information on
+the format.
 
-* ``debian-control``: A parser and editor for Debian control files, apt lists.
-* ``debian-copyright``: A parser and editor for Debian copyright files.
-* ``dep3``: A parser and editor for Debian DEP-3 headers.
-* ``r-description``: A parser and editor for R DESCRIPTION files.
+Besides parsing the control files it also supports parsing and comparison
+of version strings according to the R package versioning scheme.
 
-# Example
-
-```rust
-use deb822_lossless::Deb822;
-use std::str::FromStr;
-
-let input = r#"Package: deb822-lossless
-Maintainer: Jelmer Vernooĳ <jelmer@debian.org>
-Section: rust
-
-Package: deb822-lossless
-Architecture: any
-Description: Lossless parser for deb822 style files.
-  This parser can be used to parse files in the deb822 format, while preserving
-  all whitespace and comments. It is based on the [rowan] library, which is a
-  lossless parser library for Rust.
-
-"#;
-
-let deb822 = Deb822::from_str(input).unwrap();
-assert_eq!(deb822.paragraphs().count(), 2);
-```
-
-A derive-macro is also provided for easily defining more Deb822-derived types:
+## Example
 
 ```rust
 
-use deb822_lossless::{FromDeb822, ToDeb822};
+use r_description::RDescription;
 
-#[derive(FromDeb822, ToDeb822, Debug, PartialEq)]
-struct Test {
-    package: String,
-    architecture: Option<String>,
+let desc = r_description::parse(r###"Package: foo
+Version: 1.0
+# Inline comment that will be preserved.
+Depends: R (>= 3.0.0)
+"###).unwrap();
 
-    #[deb822(key = "Description")]
-    description: String,
-}
+assert_eq!(desc.get("Package"), Some("foo"));
+assert_eq!(desc.get("Version"), Some("1.0"));
+assert_eq!(desc.get("Depends"), Some("R (>= 3.0.0"));
 
-let input = r#"Package: deb822-lossless
-Architecture: any
-Description: Lossless parser for deb822 style files.
-  This parser can be used to parse files in the deb822 format, while preserving
-  all whitespace and comments. It is based on the [rowan] library, which is a
-  lossless parser library for Rust.
-"#;
-
-let parser: Paragraph = input.parse().unwrap();
-let test: Test = parser.into();
-
-assert_eq!(test.package, "deb822-lossless");
+desc.insert("License", "MIT");
 ```
