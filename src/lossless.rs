@@ -1,1647 +1,1555 @@
-//! Parser for deb822 style files.
-//!
-//! This parser can be used to parse files in the deb822 format, while preserving
-//! all whitespace and comments. It is based on the [rowan] library, which is a
-//! lossless parser library for Rust.
-//!
-//! Once parsed, the file can be traversed or modified, and then written back to
-//! a file.
-//!
-//! # Example
-//!
-//! ```rust
-//! use deb822_lossless::Deb822;
-//! use std::str::FromStr;
-//!
-//! let input = r###"Package: deb822-lossless
-//! ## Comments are preserved
-//! Maintainer: Jelmer Vernooĳ <jelmer@debian.org>
-//! Homepage: https://github.com/jelmer/deb822-lossless
-//! Section: rust
-//!
-//! Package: deb822-lossless
-//! Architecture: any
-//! Description: Lossless parser for deb822 style files.
-//!   This parser can be used to parse files in the deb822 format, while preserving
-//!   all whitespace and comments. It is based on the [rowan] library, which is a
-//!   lossless parser library for Rust.
-//! "###;
-//!
-//! let deb822 = Deb822::from_str(input).unwrap();
-//! assert_eq!(deb822.paragraphs().count(), 2);
-//! let homepage = deb822.paragraphs().nth(0).unwrap().get("Homepage");
-//! assert_eq!(homepage.as_deref(), Some("https://github.com/jelmer/deb822-lossless"));
-//! ```
+use crate::RCode;
+/// A library for parsing and manipulating R DESCRIPTION files.
+///
+/// See https://r-pkgs.org/description.html for more information.
+use deb822_lossless::Paragraph;
+pub use relations::{Relation, Relations};
 
-use crate::{
-    lex::lex,
-    lex::SyntaxKind::{self, *},
-    Indentation,
-};
-use rowan::ast::AstNode;
-use std::path::Path;
-use std::str::FromStr;
+pub struct RDescription(Paragraph);
 
-/// List of encountered syntax errors.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ParseError(Vec<String>);
-
-impl std::fmt::Display for ParseError {
+impl std::fmt::Display for RDescription {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        for err in &self.0 {
-            writeln!(f, "{}", err)?;
-        }
-        Ok(())
+        write!(f, "{}", self.0)
     }
 }
 
-impl std::error::Error for ParseError {}
+impl Default for RDescription {
+    fn default() -> Self {
+        Self(Paragraph::new())
+    }
+}
 
-/// Error parsing deb822 control files
 #[derive(Debug)]
 pub enum Error {
-    /// A syntax error was encountered while parsing the file.
-    ParseError(ParseError),
-
-    /// An I/O error was encountered while reading the file.
-    IoError(std::io::Error),
+    Io(std::io::Error),
+    Parse(deb822_lossless::ParseError),
 }
 
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        match &self {
-            Error::ParseError(err) => write!(f, "{}", err),
-            Error::IoError(err) => write!(f, "{}", err),
+        match self {
+            Self::Io(e) => write!(f, "IO error: {}", e),
+            Self::Parse(e) => write!(f, "Parse error: {}", e),
         }
-    }
-}
-
-impl From<ParseError> for Error {
-    fn from(err: ParseError) -> Self {
-        Self::ParseError(err)
-    }
-}
-
-impl From<std::io::Error> for Error {
-    fn from(err: std::io::Error) -> Self {
-        Self::IoError(err)
     }
 }
 
 impl std::error::Error for Error {}
 
-/// Second, implementing the `Language` trait teaches rowan to convert between
-/// these two SyntaxKind types, allowing for a nicer SyntaxNode API where
-/// "kinds" are values from our `enum SyntaxKind`, instead of plain u16 values.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum Lang {}
-impl rowan::Language for Lang {
-    type Kind = SyntaxKind;
-    fn kind_from_raw(raw: rowan::SyntaxKind) -> Self::Kind {
-        unsafe { std::mem::transmute::<u16, SyntaxKind>(raw.0) }
-    }
-    fn kind_to_raw(kind: Self::Kind) -> rowan::SyntaxKind {
-        kind.into()
+impl From<deb822_lossless::ParseError> for Error {
+    fn from(e: deb822_lossless::ParseError) -> Self {
+        Self::Parse(e)
     }
 }
 
-/// GreenNode is an immutable tree, which is cheap to change,
-/// but doesn't contain offsets and parent pointers.
-use rowan::GreenNode;
-
-/// You can construct GreenNodes by hand, but a builder
-/// is helpful for top-down parsers: it maintains a stack
-/// of currently in-progress nodes
-use rowan::GreenNodeBuilder;
-
-/// The parse results are stored as a "green tree".
-/// We'll discuss working with the results later
-struct Parse {
-    green_node: GreenNode,
-    #[allow(unused)]
-    errors: Vec<String>,
+impl From<std::io::Error> for Error {
+    fn from(e: std::io::Error) -> Self {
+        Self::Io(e)
+    }
 }
 
-fn parse(text: &str) -> Parse {
-    struct Parser {
-        /// input tokens, including whitespace,
-        /// in *reverse* order.
-        tokens: Vec<(SyntaxKind, String)>,
-        /// the in-progress tree.
-        builder: GreenNodeBuilder<'static>,
-        /// the list of syntax errors we've accumulated
-        /// so far.
+impl std::str::FromStr for RDescription {
+    type Err = Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(Self(Paragraph::from_str(s)?))
+    }
+}
+
+impl RDescription {
+    pub fn new() -> Self {
+        Self(Paragraph::new())
+    }
+
+    pub fn package(&self) -> Option<String> {
+        self.0.get("Package")
+    }
+    pub fn set_package(&mut self, package: &str) {
+        self.0.insert("Package", package);
+    }
+
+    /// One line description of the package, and is often shown in a package listing
+    ///
+    /// It should be plain text (no markup), capitalised like a title, and NOT end in a period.
+    /// Keep it short: listings will often truncate the title to 65 characters.
+    pub fn title(&self) -> Option<String> {
+        self.0.get("Title")
+    }
+
+    pub fn maintainer(&self) -> Option<String> {
+        self.0.get("Maintainer")
+    }
+
+    pub fn set_maintainer(&mut self, maintainer: &str) {
+        self.0.insert("Maintainer", maintainer);
+    }
+
+    pub fn authors(&self) -> Option<RCode> {
+        self.0.get("Authors@R").map(|s| s.parse().unwrap())
+    }
+
+    pub fn set_authors(&mut self, authors: &RCode) {
+        self.0.insert("Authors@R", &authors.to_string());
+    }
+
+    pub fn set_title(&mut self, title: &str) {
+        self.0.insert("Title", title);
+    }
+
+    pub fn description(&self) -> Option<String> {
+        self.0.get("Description")
+    }
+
+    pub fn set_description(&mut self, description: &str) {
+        self.0.insert("Description", description);
+    }
+
+    pub fn version(&self) -> Option<String> {
+        self.0.get("Version")
+    }
+
+    pub fn set_version(&mut self, version: &str) {
+        self.0.insert("Version", version);
+    }
+
+    pub fn encoding(&self) -> Option<String> {
+        self.0.get("Encoding")
+    }
+
+    pub fn set_encoding(&mut self, encoding: &str) {
+        self.0.insert("Encoding", encoding);
+    }
+
+    pub fn license(&self) -> Option<String> {
+        self.0.get("License")
+    }
+
+    pub fn set_license(&mut self, license: &str) {
+        self.0.insert("License", license);
+    }
+
+    pub fn roxygen_note(&self) -> Option<String> {
+        self.0.get("RoxygenNote")
+    }
+
+    pub fn set_roxygen_note(&mut self, roxygen_note: &str) {
+        self.0.insert("RoxygenNote", roxygen_note);
+    }
+
+    pub fn roxygen(&self) -> Option<String> {
+        self.0.get("Roxygen")
+    }
+
+    pub fn set_roxygen(&mut self, roxygen: &str) {
+        self.0.insert("Roxygen", roxygen);
+    }
+
+    /// The URL of the package's homepage.
+    pub fn url(&self) -> Option<String> {
+        // TODO: parse list of URLs, separated by commas
+        self.0.get("URL")
+    }
+
+    pub fn set_url(&mut self, url: &str) {
+        // TODO: parse list of URLs, separated by commas
+        self.0.insert("URL", url);
+    }
+
+    pub fn bug_reports(&self) -> Option<url::Url> {
+        self.0
+            .get("BugReports")
+            .map(|s| url::Url::parse(s.as_str()).unwrap())
+    }
+
+    pub fn set_bug_reports(&mut self, bug_reports: &url::Url) {
+        self.0.insert("BugReports", bug_reports.as_str());
+    }
+
+    pub fn imports(&self) -> Option<Vec<String>> {
+        self.0
+            .get("Imports")
+            .map(|s| s.split(',').map(|s| s.trim().to_string()).collect())
+    }
+
+    pub fn set_imports(&mut self, imports: &[&str]) {
+        self.0.insert("Imports", &imports.join(", "));
+    }
+
+    pub fn suggests(&self) -> Option<Relations> {
+        self.0.get("Suggests").map(|s| s.parse().unwrap())
+    }
+
+    pub fn set_suggests(&mut self, suggests: Relations) {
+        self.0.insert("Suggests", &suggests.to_string());
+    }
+
+    pub fn depends(&self) -> Option<Relations> {
+        self.0.get("Depends").map(|s| s.parse().unwrap())
+    }
+
+    pub fn set_depends(&mut self, depends: Relations) {
+        self.0.insert("Depends", &depends.to_string());
+    }
+
+    pub fn linking_to(&self) -> Option<Vec<String>> {
+        self.0
+            .get("LinkingTo")
+            .map(|s| s.split(',').map(|s| s.trim().to_string()).collect())
+    }
+
+    pub fn set_linking_to(&mut self, linking_to: &[&str]) {
+        self.0.insert("LinkingTo", &linking_to.join(", "));
+    }
+
+    pub fn lazy_data(&self) -> Option<bool> {
+        self.0.get("LazyData").map(|s| s == "true")
+    }
+
+    pub fn set_lazy_data(&mut self, lazy_data: bool) {
+        self.0
+            .insert("LazyData", if lazy_data { "true" } else { "false" });
+    }
+
+    pub fn collate(&self) -> Option<String> {
+        self.0.get("Collate")
+    }
+
+    pub fn set_collate(&mut self, collate: &str) {
+        self.0.insert("Collate", collate);
+    }
+
+    pub fn vignette_builder(&self) -> Option<Vec<String>> {
+        self.0
+            .get("VignetteBuilder")
+            .map(|s| s.split(',').map(|s| s.trim().to_string()).collect())
+    }
+
+    pub fn set_vignette_builder(&mut self, vignette_builder: &[&str]) {
+        self.0
+            .insert("VignetteBuilder", &vignette_builder.join(", "));
+    }
+
+    pub fn system_requirements(&self) -> Option<Vec<String>> {
+        self.0
+            .get("SystemRequirements")
+            .map(|s| s.split(',').map(|s| s.trim().to_string()).collect())
+    }
+
+    pub fn set_system_requirements(&mut self, system_requirements: &[&str]) {
+        self.0
+            .insert("SystemRequirements", &system_requirements.join(", "));
+    }
+
+    pub fn date(&self) -> Option<String> {
+        self.0.get("Date")
+    }
+
+    pub fn set_date(&mut self, date: &str) {
+        self.0.insert("Date", date);
+    }
+}
+
+pub mod relations {
+    //! Parser for relationship fields like `Depends`, `Recommends`, etc.
+    //!
+    //! # Example
+    //! ```
+    //! use r_description::lossless::{Relations, Relation};
+    //! use r_description::relations::VersionConstraint;
+    //!
+    //! let mut relations: Relations = r"cli (>= 0.19.0), R".parse().unwrap();
+    //! assert_eq!(relations.to_string(), "cli (>= 0.19.0), R");
+    //! assert!(relations.satisfied_by(|name: &str| -> Option<r_description::version::Version> {
+    //!    match name {
+    //!    "cli" => Some("0.19.0".parse().unwrap()),
+    //!    "R" => Some("2.25.1".parse().unwrap()),
+    //!    _ => None
+    //!    }}));
+    //! relations.remove_relation(1);
+    //! assert_eq!(relations.to_string(), "cli (>= 0.19.0)");
+    //! ```
+    use crate::relations::SyntaxKind::{self, *};
+    use crate::relations::VersionConstraint;
+    use crate::version::Version;
+    use rowan::{Direction, NodeOrToken};
+
+    /// Error type for parsing relations fields
+    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+    pub struct ParseError(Vec<String>);
+
+    impl std::fmt::Display for ParseError {
+        fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            for err in &self.0 {
+                writeln!(f, "{}", err)?;
+            }
+            Ok(())
+        }
+    }
+
+    impl std::error::Error for ParseError {}
+
+    /// Second, implementing the `Language` trait teaches rowan to convert between
+    /// these two SyntaxKind types, allowing for a nicer SyntaxNode API where
+    /// "kinds" are values from our `enum SyntaxKind`, instead of plain u16 values.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    enum Lang {}
+    impl rowan::Language for Lang {
+        type Kind = SyntaxKind;
+        fn kind_from_raw(raw: rowan::SyntaxKind) -> Self::Kind {
+            unsafe { std::mem::transmute::<u16, SyntaxKind>(raw.0) }
+        }
+        fn kind_to_raw(kind: Self::Kind) -> rowan::SyntaxKind {
+            kind.into()
+        }
+    }
+
+    /// GreenNode is an immutable tree, which is cheap to change,
+    /// but doesn't contain offsets and parent pointers.
+    use rowan::{GreenNode, GreenToken};
+
+    /// You can construct GreenNodes by hand, but a builder
+    /// is helpful for top-down parsers: it maintains a stack
+    /// of currently in-progress nodes
+    use rowan::GreenNodeBuilder;
+
+    /// The parse results are stored as a "green tree".
+    /// We'll discuss working with the results later
+    struct Parse {
+        green_node: GreenNode,
+        #[allow(unused)]
         errors: Vec<String>,
     }
 
-    impl Parser {
-        fn parse_entry(&mut self) {
-            while self.current() == Some(COMMENT) {
-                self.bump();
+    fn parse(text: &str) -> Parse {
+        struct Parser {
+            /// input tokens, including whitespace,
+            /// in *reverse* order.
+            tokens: Vec<(SyntaxKind, String)>,
+            /// the in-progress tree.
+            builder: GreenNodeBuilder<'static>,
+            /// the list of syntax errors we've accumulated
+            /// so far.
+            errors: Vec<String>,
+        }
 
-                match self.current() {
-                    Some(NEWLINE) => {
-                        self.bump();
-                    }
-                    None => {
-                        return;
-                    }
-                    Some(g) => {
-                        self.builder.start_node(ERROR.into());
-                        self.bump();
-                        self.errors.push(format!("expected newline, got {:?}", g));
-                        self.builder.finish_node();
-                    }
-                }
-            }
-
-            self.builder.start_node(ENTRY.into());
-
-            // First, parse the key and colon
-            if self.current() == Some(KEY) {
-                self.bump();
-                self.skip_ws();
-            } else {
-                self.builder.start_node(ERROR.into());
+        impl Parser {
+            fn error(&mut self, error: String) {
+                self.errors.push(error);
+                self.builder.start_node(SyntaxKind::ERROR.into());
                 if self.current().is_some() {
                     self.bump();
                 }
-                self.errors.push("expected key".to_string());
                 self.builder.finish_node();
             }
-            if self.current() == Some(COLON) {
-                self.bump();
-                self.skip_ws();
-            } else {
-                self.builder.start_node(ERROR.into());
-                if self.current().is_some() {
+
+            fn parse_relation(&mut self) {
+                self.builder.start_node(SyntaxKind::RELATION.into());
+                if self.current() == Some(IDENT) {
                     self.bump();
+                } else {
+                    self.error("Expected package name".to_string());
                 }
-                self.errors
-                    .push(format!("expected ':', got {:?}", self.current()));
-                self.builder.finish_node();
-            }
-            loop {
-                while self.current() == Some(WHITESPACE) || self.current() == Some(VALUE) {
-                    self.bump();
+                match self.peek_past_ws() {
+                    Some(COMMA) => {}
+                    None | Some(L_PARENS) => {
+                        self.skip_ws();
+                    }
+                    e => {
+                        self.skip_ws();
+                        self.error(format!(
+                            "Expected ':' or '|' or '[' or '<' or ',' but got {:?}",
+                            e
+                        ));
+                    }
                 }
 
-                match self.current() {
-                    None => {
-                        break;
-                    }
-                    Some(NEWLINE) => {
-                        self.bump();
-                    }
-                    Some(g) => {
-                        self.builder.start_node(ERROR.into());
-                        self.bump();
-                        self.errors.push(format!("expected newline, got {:?}", g));
-                        self.builder.finish_node();
-                    }
-                }
-                if self.current() == Some(INDENT) {
+                if self.peek_past_ws() == Some(L_PARENS) {
+                    self.skip_ws();
+                    self.builder.start_node(VERSION.into());
                     self.bump();
                     self.skip_ws();
-                } else {
-                    break;
-                }
-            }
-            self.builder.finish_node();
-        }
 
-        fn parse_paragraph(&mut self) {
-            self.builder.start_node(PARAGRAPH.into());
-            while self.current() != Some(NEWLINE) && self.current().is_some() {
-                self.parse_entry();
-            }
-            self.builder.finish_node();
-        }
+                    self.builder.start_node(CONSTRAINT.into());
 
-        fn parse(mut self) -> Parse {
-            // Make sure that the root node covers all source
-            self.builder.start_node(ROOT.into());
-            while self.current().is_some() {
-                self.skip_ws_and_newlines();
-                if self.current().is_some() {
-                    self.parse_paragraph();
-                }
-            }
-            // Don't forget to eat *trailing* whitespace
-            self.skip_ws_and_newlines();
-            // Close the root node.
-            self.builder.finish_node();
+                    while self.current() == Some(L_ANGLE)
+                        || self.current() == Some(R_ANGLE)
+                        || self.current() == Some(EQUAL)
+                    {
+                        self.bump();
+                    }
 
-            // Turn the builder into a GreenNode
-            Parse {
-                green_node: self.builder.finish(),
-                errors: self.errors,
-            }
-        }
-        /// Advance one token, adding it to the current branch of the tree builder.
-        fn bump(&mut self) {
-            let (kind, text) = self.tokens.pop().unwrap();
-            self.builder.token(kind.into(), text.as_str());
-        }
-        /// Peek at the first unprocessed token
-        fn current(&self) -> Option<SyntaxKind> {
-            self.tokens.last().map(|(kind, _)| *kind)
-        }
-        fn skip_ws(&mut self) {
-            while self.current() == Some(WHITESPACE) || self.current() == Some(COMMENT) {
-                self.bump()
-            }
-        }
-        fn skip_ws_and_newlines(&mut self) {
-            while self.current() == Some(WHITESPACE)
-                || self.current() == Some(COMMENT)
-                || self.current() == Some(NEWLINE)
-            {
-                self.builder.start_node(EMPTY_LINE.into());
-                while self.current() != Some(NEWLINE) && self.current().is_some() {
-                    self.bump();
+                    self.builder.finish_node();
+
+                    self.skip_ws();
+
+                    if self.current() == Some(IDENT) {
+                        self.bump();
+                    } else {
+                        self.error("Expected version".to_string());
+                    }
+
+                    if self.current() == Some(R_PARENS) {
+                        self.bump();
+                    } else {
+                        self.error("Expected ')'".to_string());
+                    }
+
+                    self.builder.finish_node();
                 }
-                if self.current() == Some(NEWLINE) {
-                    self.bump();
-                }
+
                 self.builder.finish_node();
             }
+
+            fn parse(mut self) -> Parse {
+                self.builder.start_node(SyntaxKind::ROOT.into());
+
+                self.skip_ws();
+
+                while self.current().is_some() {
+                    match self.current() {
+                        Some(IDENT) => self.parse_relation(),
+                        Some(COMMA) => {
+                            // Empty relation, but that's okay - probably?
+                        }
+                        Some(c) => {
+                            self.error(format!("expected identifier or comma but got {:?}", c));
+                        }
+                        None => {
+                            self.error("expected identifier but got end of file".to_string());
+                        }
+                    }
+
+                    self.skip_ws();
+                    match self.current() {
+                        Some(COMMA) => {
+                            self.bump();
+                        }
+                        None => {
+                            break;
+                        }
+                        c => {
+                            self.error(format!("expected comma or end of file but got {:?}", c));
+                        }
+                    }
+                    self.skip_ws();
+                }
+
+                self.builder.finish_node();
+                // Turn the builder into a GreenNode
+                Parse {
+                    green_node: self.builder.finish(),
+                    errors: self.errors,
+                }
+            }
+            /// Advance one token, adding it to the current branch of the tree builder.
+            fn bump(&mut self) {
+                let (kind, text) = self.tokens.pop().unwrap();
+                self.builder.token(kind.into(), text.as_str());
+            }
+            /// Peek at the first unprocessed token
+            fn current(&self) -> Option<SyntaxKind> {
+                self.tokens.last().map(|(kind, _)| *kind)
+            }
+            fn skip_ws(&mut self) {
+                while self.current() == Some(WHITESPACE) || self.current() == Some(NEWLINE) {
+                    self.bump()
+                }
+            }
+
+            fn peek_past_ws(&self) -> Option<SyntaxKind> {
+                let mut i = self.tokens.len();
+                while i > 0 {
+                    i -= 1;
+                    match self.tokens[i].0 {
+                        WHITESPACE | NEWLINE => {}
+                        _ => return Some(self.tokens[i].0),
+                    }
+                }
+                None
+            }
+        }
+
+        let mut tokens = crate::relations::lex(text);
+        tokens.reverse();
+        Parser {
+            tokens,
+            builder: GreenNodeBuilder::new(),
+            errors: Vec::new(),
+        }
+        .parse()
+    }
+
+    /// To work with the parse results we need a view into the
+    /// green tree - the Syntax tree.
+    /// It is also immutable, like a GreenNode,
+    /// but it contains parent pointers, offsets, and
+    /// has identity semantics.
+
+    type SyntaxNode = rowan::SyntaxNode<Lang>;
+    #[allow(unused)]
+    type SyntaxToken = rowan::SyntaxToken<Lang>;
+    #[allow(unused)]
+    type SyntaxElement = rowan::NodeOrToken<SyntaxNode, SyntaxToken>;
+
+    impl Parse {
+        fn root_mut(&self) -> Relations {
+            Relations::cast(SyntaxNode::new_root_mut(self.green_node.clone())).unwrap()
         }
     }
 
-    let mut tokens = lex(text);
-    tokens.reverse();
-    Parser {
-        tokens,
-        builder: GreenNodeBuilder::new(),
-        errors: Vec::new(),
-    }
-    .parse()
-}
+    macro_rules! ast_node {
+        ($ast:ident, $kind:ident) => {
+            /// A node in the syntax tree representing a $ast
+            #[repr(transparent)]
+            pub struct $ast(SyntaxNode);
+            impl $ast {
+                #[allow(unused)]
+                fn cast(node: SyntaxNode) -> Option<Self> {
+                    if node.kind() == $kind {
+                        Some(Self(node))
+                    } else {
+                        None
+                    }
+                }
+            }
 
-/// To work with the parse results we need a view into the
-/// green tree - the Syntax tree.
-/// It is also immutable, like a GreenNode,
-/// but it contains parent pointers, offsets, and
-/// has identity semantics.
-
-type SyntaxNode = rowan::SyntaxNode<Lang>;
-#[allow(unused)]
-type SyntaxToken = rowan::SyntaxToken<Lang>;
-#[allow(unused)]
-type SyntaxElement = rowan::NodeOrToken<SyntaxNode, SyntaxToken>;
-
-impl Parse {
-    #[cfg(test)]
-    fn syntax(&self) -> SyntaxNode {
-        SyntaxNode::new_root(self.green_node.clone())
+            impl std::fmt::Display for $ast {
+                fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                    f.write_str(&self.0.text().to_string())
+                }
+            }
+        };
     }
 
-    fn root_mut(&self) -> Deb822 {
-        Deb822::cast(SyntaxNode::new_root_mut(self.green_node.clone())).unwrap()
-    }
-}
+    ast_node!(Relations, ROOT);
+    ast_node!(Relation, RELATION);
 
-macro_rules! ast_node {
-    ($ast:ident, $kind:ident) => {
-        /// An AST node representing a $ast.
-        #[derive(PartialEq, Eq, Hash)]
-        #[repr(transparent)]
-        pub struct $ast(SyntaxNode);
-        impl $ast {
-            #[allow(unused)]
-            fn cast(node: SyntaxNode) -> Option<Self> {
-                if node.kind() == $kind {
-                    Some(Self(node))
+    impl PartialEq for Relations {
+        fn eq(&self, other: &Self) -> bool {
+            self.relations().collect::<Vec<_>>() == other.relations().collect::<Vec<_>>()
+        }
+    }
+
+    impl PartialEq for Relation {
+        fn eq(&self, other: &Self) -> bool {
+            self.name() == other.name() && self.version() == other.version()
+        }
+    }
+
+    #[cfg(feature = "serde")]
+    impl serde::Serialize for Relations {
+        fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+            let rep = self.to_string();
+            serializer.serialize_str(&rep)
+        }
+    }
+
+    #[cfg(feature = "serde")]
+    impl<'de> serde::Deserialize<'de> for Relations {
+        fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+            let s = String::deserialize(deserializer)?;
+            let relations = s.parse().map_err(serde::de::Error::custom)?;
+            Ok(relations)
+        }
+    }
+
+    impl std::fmt::Debug for Relations {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            let mut s = f.debug_struct("Relations");
+
+            for relation in self.relations() {
+                s.field("relation", &relation);
+            }
+
+            s.finish()
+        }
+    }
+
+    impl std::fmt::Debug for Relation {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            let mut s = f.debug_struct("Relation");
+
+            s.field("name", &self.name());
+
+            if let Some((vc, version)) = self.version() {
+                s.field("version", &vc);
+                s.field("version", &version);
+            }
+
+            s.finish()
+        }
+    }
+
+    #[cfg(feature = "serde")]
+    impl serde::Serialize for Relation {
+        fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+            let rep = self.to_string();
+            serializer.serialize_str(&rep)
+        }
+    }
+
+    #[cfg(feature = "serde")]
+    impl<'de> serde::Deserialize<'de> for Relation {
+        fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+            let s = String::deserialize(deserializer)?;
+            let relation = s.parse().map_err(serde::de::Error::custom)?;
+            Ok(relation)
+        }
+    }
+
+    impl Default for Relations {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
+    impl Relations {
+        /// Create a new relations field
+        pub fn new() -> Self {
+            Self::from(vec![])
+        }
+
+        /// Wrap and sort this relations field
+        #[must_use]
+        pub fn wrap_and_sort(self) -> Self {
+            let mut entries = self
+                .relations()
+                .map(|e| e.wrap_and_sort())
+                .collect::<Vec<_>>();
+            entries.sort();
+            // TODO: preserve comments
+            Self::from(entries)
+        }
+
+        /// Iterate over the entries in this relations field
+        pub fn relations(&self) -> impl Iterator<Item = Relation> + '_ {
+            self.0.children().filter_map(Relation::cast)
+        }
+
+        /// Iterate over the entries in this relations field
+        pub fn iter(&self) -> impl Iterator<Item = Relation> + '_ {
+            self.relations()
+        }
+
+        /// Remove the entry at the given index
+        pub fn get_relation(&self, idx: usize) -> Option<Relation> {
+            self.relations().nth(idx)
+        }
+
+        /// Remove the relation at the given index
+        pub fn remove_relation(&mut self, idx: usize) -> Relation {
+            let mut relation = self.get_relation(idx).unwrap();
+            relation.remove();
+            relation
+        }
+
+        /// Insert a new relation at the given index
+        pub fn insert(&mut self, idx: usize, relation: Relation) {
+            let is_empty = !self.0.children_with_tokens().any(|n| n.kind() == COMMA);
+            let (position, new_children) = if let Some(current_relation) = self.relations().nth(idx)
+            {
+                let to_insert: Vec<NodeOrToken<GreenNode, GreenToken>> = if idx == 0 && is_empty {
+                    vec![relation.0.green().into()]
                 } else {
-                    None
-                }
-            }
-        }
+                    vec![
+                        relation.0.green().into(),
+                        NodeOrToken::Token(GreenToken::new(COMMA.into(), ",")),
+                        NodeOrToken::Token(GreenToken::new(WHITESPACE.into(), " ")),
+                    ]
+                };
 
-        impl AstNode for $ast {
-            type Language = Lang;
-
-            fn can_cast(kind: SyntaxKind) -> bool {
-                kind == $kind
-            }
-
-            fn cast(syntax: SyntaxNode) -> Option<Self> {
-                Self::cast(syntax)
-            }
-
-            fn syntax(&self) -> &SyntaxNode {
-                &self.0
-            }
-        }
-
-        impl std::fmt::Display for $ast {
-            fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-                write!(f, "{}", self.0.text())
-            }
-        }
-    };
-}
-
-impl std::fmt::Debug for Deb822 {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Deb822").finish()
-    }
-}
-
-ast_node!(Deb822, ROOT);
-ast_node!(Paragraph, PARAGRAPH);
-ast_node!(Entry, ENTRY);
-
-impl Default for Deb822 {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Deb822 {
-    /// Create a new empty deb822 file.
-    pub fn new() -> Deb822 {
-        let mut builder = GreenNodeBuilder::new();
-
-        builder.start_node(ROOT.into());
-        builder.finish_node();
-        Deb822(SyntaxNode::new_root_mut(builder.finish()))
-    }
-
-    /// Provide a formatter that can handle indentation and trailing separators
-    ///
-    /// # Arguments
-    /// * `control` - The control file to format
-    /// * `indentation` - The indentation to use
-    /// * `immediate_empty_line` - Whether the value should always start with an empty line. If true,
-    ///                  then the result becomes something like "Field:\n value". This parameter
-    ///                  only applies to the values that will be formatted over more than one line.
-    /// * `max_line_length_one_liner` - If set, then this is the max length of the value
-    ///                        if it is crammed into a "one-liner" value. If the value(s) fit into
-    ///                        one line, this parameter will overrule immediate_empty_line.
-    /// * `sort_paragraphs` - If set, then this function will sort the paragraphs according to the
-    ///                given function.
-    /// * `sort_entries` - If set, then this function will sort the entries according to the
-    ///               given function.
-    #[must_use]
-    pub fn wrap_and_sort(
-        &self,
-        sort_paragraphs: Option<&dyn Fn(&Paragraph, &Paragraph) -> std::cmp::Ordering>,
-        wrap_and_sort_paragraph: Option<&dyn Fn(&Paragraph) -> Paragraph>,
-    ) -> Deb822 {
-        let mut builder = GreenNodeBuilder::new();
-        builder.start_node(ROOT.into());
-        let mut current = vec![];
-        let mut paragraphs = vec![];
-        for c in self.0.children_with_tokens() {
-            match c.kind() {
-                PARAGRAPH => {
-                    paragraphs.push((
-                        current,
-                        Paragraph::cast(c.as_node().unwrap().clone()).unwrap(),
-                    ));
-                    current = vec![];
-                }
-                COMMENT | ERROR => {
-                    current.push(c);
-                }
-                EMPTY_LINE => {
-                    current.extend(
-                        c.as_node()
-                            .unwrap()
-                            .children_with_tokens()
-                            .skip_while(|c| matches!(c.kind(), EMPTY_LINE | NEWLINE | WHITESPACE)),
-                    );
-                }
-                _ => {}
-            }
-        }
-        if let Some(sort_paragraph) = sort_paragraphs {
-            paragraphs.sort_by(|a, b| {
-                let a_key = &a.1;
-                let b_key = &b.1;
-                sort_paragraph(a_key, b_key)
-            });
-        }
-
-        for (i, paragraph) in paragraphs.into_iter().enumerate() {
-            if i > 0 {
-                builder.start_node(EMPTY_LINE.into());
-                builder.token(NEWLINE.into(), "\n");
-                builder.finish_node();
-            }
-            for c in paragraph.0.into_iter() {
-                builder.token(c.kind().into(), c.as_token().unwrap().text());
-            }
-            let new_paragraph = if let Some(ref ws) = wrap_and_sort_paragraph {
-                ws(&paragraph.1)
+                (current_relation.0.index(), to_insert)
             } else {
-                paragraph.1
+                let child_count = self.0.children_with_tokens().count();
+                (
+                    child_count,
+                    if idx == 0 {
+                        vec![relation.0.green().into()]
+                    } else {
+                        vec![
+                            NodeOrToken::Token(GreenToken::new(COMMA.into(), ",")),
+                            NodeOrToken::Token(GreenToken::new(WHITESPACE.into(), " ")),
+                            relation.0.green().into(),
+                        ]
+                    },
+                )
             };
-            inject(&mut builder, new_paragraph.0);
-        }
-
-        for c in current {
-            builder.token(c.kind().into(), c.as_token().unwrap().text());
-        }
-
-        builder.finish_node();
-        Self(SyntaxNode::new_root_mut(builder.finish()))
-    }
-
-    /// Returns an iterator over all paragraphs in the file.
-    pub fn paragraphs(&self) -> impl Iterator<Item = Paragraph> {
-        self.0.children().filter_map(Paragraph::cast)
-    }
-
-    /// Add a new empty paragraph to the end of the file.
-    pub fn add_paragraph(&mut self) -> Paragraph {
-        let paragraph = Paragraph::new();
-        let mut to_insert = vec![];
-        if self.0.children().count() > 0 {
-            let mut builder = GreenNodeBuilder::new();
-            builder.start_node(EMPTY_LINE.into());
-            builder.token(NEWLINE.into(), "\n");
-            builder.finish_node();
-            to_insert.push(SyntaxNode::new_root_mut(builder.finish()).into());
-        }
-        to_insert.push(paragraph.0.clone().into());
-        self.0.splice_children(
-            self.0.children().count()..self.0.children().count(),
-            to_insert,
-        );
-        paragraph
-    }
-
-    /// Read a deb822 file from the given path.
-    pub fn from_file(path: impl AsRef<Path>) -> Result<Self, Error> {
-        let text = std::fs::read_to_string(path)?;
-        Ok(Self::from_str(&text)?)
-    }
-
-    /// Read a deb822 file from the given path, ignoring any syntax errors.
-    pub fn from_file_relaxed(
-        path: impl AsRef<Path>,
-    ) -> Result<(Self, Vec<String>), std::io::Error> {
-        let text = std::fs::read_to_string(path)?;
-        Ok(Self::from_str_relaxed(&text))
-    }
-
-    /// Parse a deb822 file from a string, allowing syntax errors.
-    pub fn from_str_relaxed(s: &str) -> (Self, Vec<String>) {
-        let parsed = parse(s);
-        (parsed.root_mut(), parsed.errors)
-    }
-
-    /// Read a deb822 file from a Read object.
-    pub fn read<R: std::io::Read>(mut r: R) -> Result<Self, Error> {
-        let mut buf = String::new();
-        r.read_to_string(&mut buf)?;
-        Ok(Self::from_str(&buf)?)
-    }
-
-    /// Read a deb822 file from a Read object, allowing syntax errors.
-    pub fn read_relaxed<R: std::io::Read>(mut r: R) -> Result<(Self, Vec<String>), std::io::Error> {
-        let mut buf = String::new();
-        r.read_to_string(&mut buf)?;
-        Ok(Self::from_str_relaxed(&buf))
-    }
-}
-
-fn inject(builder: &mut GreenNodeBuilder, node: SyntaxNode) {
-    builder.start_node(node.kind().into());
-    for child in node.children_with_tokens() {
-        match child {
-            rowan::NodeOrToken::Node(child) => {
-                inject(builder, child);
-            }
-            rowan::NodeOrToken::Token(token) => {
-                builder.token(token.kind().into(), token.text());
-            }
-        }
-    }
-    builder.finish_node();
-}
-
-impl FromIterator<Paragraph> for Deb822 {
-    fn from_iter<T: IntoIterator<Item = Paragraph>>(iter: T) -> Self {
-        let mut builder = GreenNodeBuilder::new();
-        builder.start_node(ROOT.into());
-        for (i, paragraph) in iter.into_iter().enumerate() {
-            if i > 0 {
-                builder.start_node(EMPTY_LINE.into());
-                builder.token(NEWLINE.into(), "\n");
-                builder.finish_node();
-            }
-            inject(&mut builder, paragraph.0);
-        }
-        builder.finish_node();
-        Self(SyntaxNode::new_root_mut(builder.finish()))
-    }
-}
-
-impl From<Vec<(String, String)>> for Paragraph {
-    fn from(v: Vec<(String, String)>) -> Self {
-        v.into_iter().collect()
-    }
-}
-
-impl From<Vec<(&str, &str)>> for Paragraph {
-    fn from(v: Vec<(&str, &str)>) -> Self {
-        v.into_iter().collect()
-    }
-}
-
-impl FromIterator<(String, String)> for Paragraph {
-    fn from_iter<T: IntoIterator<Item = (String, String)>>(iter: T) -> Self {
-        let mut builder = GreenNodeBuilder::new();
-        builder.start_node(PARAGRAPH.into());
-        for (key, value) in iter {
-            builder.start_node(ENTRY.into());
-            builder.token(KEY.into(), &key);
-            builder.token(COLON.into(), ":");
-            builder.token(WHITESPACE.into(), " ");
-            for (i, line) in value.split('\n').enumerate() {
-                if i > 0 {
-                    builder.token(INDENT.into(), " ");
-                }
-                builder.token(VALUE.into(), line);
-                builder.token(NEWLINE.into(), "\n");
-            }
-            builder.finish_node();
-        }
-        builder.finish_node();
-        Self(SyntaxNode::new_root_mut(builder.finish()))
-    }
-}
-
-impl<'a> FromIterator<(&'a str, &'a str)> for Paragraph {
-    fn from_iter<T: IntoIterator<Item = (&'a str, &'a str)>>(iter: T) -> Self {
-        let mut builder = GreenNodeBuilder::new();
-        builder.start_node(PARAGRAPH.into());
-        for (key, value) in iter {
-            builder.start_node(ENTRY.into());
-            builder.token(KEY.into(), key);
-            builder.token(COLON.into(), ":");
-            builder.token(WHITESPACE.into(), " ");
-            for (i, line) in value.split('\n').enumerate() {
-                if i > 0 {
-                    builder.token(INDENT.into(), " ");
-                }
-                builder.token(VALUE.into(), line);
-                builder.token(NEWLINE.into(), "\n");
-            }
-            builder.finish_node();
-        }
-        builder.finish_node();
-        Self(SyntaxNode::new_root_mut(builder.finish()))
-    }
-}
-
-impl Paragraph {
-    /// Create a new empty paragraph.
-    pub fn new() -> Paragraph {
-        let mut builder = GreenNodeBuilder::new();
-
-        builder.start_node(PARAGRAPH.into());
-        builder.finish_node();
-        Paragraph(SyntaxNode::new_root_mut(builder.finish()))
-    }
-
-    /// Reformat this paragraph
-    ///
-    /// # Arguments
-    /// * `indentation` - The indentation to use
-    /// * `immediate_empty_line` - Whether multi-line values should always start with an empty line
-    /// * `max_line_length_one_liner` - If set, then this is the max length of the value if it is
-    ///     crammed into a "one-liner" value
-    /// * `sort_entries` - If set, then this function will sort the entries according to the given
-    /// function
-    /// * `format_value` - If set, then this function will format the value according to the given
-    ///   function
-    #[must_use]
-    pub fn wrap_and_sort(
-        &self,
-        indentation: Indentation,
-        immediate_empty_line: bool,
-        max_line_length_one_liner: Option<usize>,
-        sort_entries: Option<&dyn Fn(&Entry, &Entry) -> std::cmp::Ordering>,
-        format_value: Option<&dyn Fn(&str, &str) -> String>,
-    ) -> Paragraph {
-        let mut builder = GreenNodeBuilder::new();
-
-        let mut current = vec![];
-        let mut entries = vec![];
-
-        builder.start_node(PARAGRAPH.into());
-        for c in self.0.children_with_tokens() {
-            match c.kind() {
-                ENTRY => {
-                    entries.push((current, Entry::cast(c.as_node().unwrap().clone()).unwrap()));
-                    current = vec![];
-                }
-                ERROR | COMMENT => {
-                    current.push(c);
-                }
-                _ => {}
-            }
-        }
-
-        if let Some(sort_entry) = sort_entries {
-            entries.sort_by(|a, b| {
-                let a_key = &a.1;
-                let b_key = &b.1;
-                sort_entry(a_key, b_key)
-            });
-        }
-
-        for (pre, entry) in entries.into_iter() {
-            for c in pre.into_iter() {
-                builder.token(c.kind().into(), c.as_token().unwrap().text());
-            }
-
-            inject(
-                &mut builder,
-                entry
-                    .wrap_and_sort(
-                        indentation,
-                        immediate_empty_line,
-                        max_line_length_one_liner,
-                        format_value,
-                    )
-                    .0,
+            // We can safely replace the root here since Relations is a root node
+            self.0 = SyntaxNode::new_root_mut(
+                self.0.replace_with(
+                    self.0
+                        .green()
+                        .splice_children(position..position, new_children),
+                ),
             );
         }
 
-        for c in current {
-            builder.token(c.kind().into(), c.as_token().unwrap().text());
+        /// Replace the relation at the given index
+        pub fn replace(&mut self, idx: usize, relation: Relation) {
+            let current_relation = self.get_relation(idx).unwrap();
+            self.0.splice_children(
+                current_relation.0.index()..current_relation.0.index() + 1,
+                vec![relation.0.into()],
+            );
         }
 
-        builder.finish_node();
-        Self(SyntaxNode::new_root_mut(builder.finish()))
+        /// Push a new relation to the relations field
+        pub fn push(&mut self, relation: Relation) {
+            let pos = self.relations().count();
+            self.insert(pos, relation);
+        }
+
+        /// Parse a relations field from a string, allowing syntax errors
+        pub fn parse_relaxed(s: &str) -> (Relations, Vec<String>) {
+            let parse = parse(s);
+            (parse.root_mut(), parse.errors)
+        }
+
+        /// Check if this relations field is satisfied by the given package versions.
+        pub fn satisfied_by(
+            &self,
+            package_version: impl crate::relations::VersionLookup + Copy,
+        ) -> bool {
+            self.relations().all(|e| e.satisfied_by(package_version))
+        }
+
+        /// Check if this relations field is empty
+        pub fn is_empty(&self) -> bool {
+            self.relations().count() == 0
+        }
+
+        /// Get the number of entries in this relations field
+        pub fn len(&self) -> usize {
+            self.relations().count()
+        }
     }
 
-    /// Returns the value of the given key in the paragraph.
-    pub fn get(&self, key: &str) -> Option<String> {
-        self.entries()
-            .find(|e| e.key().as_deref() == Some(key))
-            .map(|e| e.value())
-    }
-
-    /// Returns whether the paragraph contains the given key.
-    pub fn contains_key(&self, key: &str) -> bool {
-        self.get(key).is_some()
-    }
-
-    /// Returns an iterator over all entries in the paragraph.
-    fn entries(&self) -> impl Iterator<Item = Entry> + '_ {
-        self.0.children().filter_map(Entry::cast)
-    }
-
-    /// Returns an iterator over all items in the paragraph.
-    pub fn items(&self) -> impl Iterator<Item = (String, String)> + '_ {
-        self.entries()
-            .filter_map(|e| e.key().map(|k| (k, e.value())))
-    }
-
-    /// Returns an iterator over all values for the given key in the paragraph.
-    pub fn get_all<'a>(&'a self, key: &'a str) -> impl Iterator<Item = String> + '_ {
-        self.items()
-            .filter_map(move |(k, v)| if k.as_str() == key { Some(v) } else { None })
-    }
-
-    /// Returns an iterator over all keys in the paragraph.
-    pub fn keys(&self) -> impl Iterator<Item = String> + '_ {
-        self.entries().filter_map(|e| e.key())
-    }
-
-    /// Remove the given field from the paragraph.
-    pub fn remove(&mut self, key: &str) {
-        for mut entry in self.entries() {
-            if entry.key().as_deref() == Some(key) {
-                entry.detach();
+    impl From<Vec<Relation>> for Relations {
+        fn from(entries: Vec<Relation>) -> Self {
+            let mut builder = GreenNodeBuilder::new();
+            builder.start_node(ROOT.into());
+            for (i, relation) in entries.into_iter().enumerate() {
+                if i > 0 {
+                    builder.token(COMMA.into(), ",");
+                    builder.token(WHITESPACE.into(), " ");
+                }
+                inject(&mut builder, relation.0);
             }
+            builder.finish_node();
+            Relations(SyntaxNode::new_root_mut(builder.finish()))
         }
     }
 
-    /// Insert a new field
-    pub fn insert(&mut self, key: &str, value: &str) {
-        let entry = Entry::new(key, value);
-        let count = self.0.children_with_tokens().count();
-        self.0.splice_children(count..count, vec![entry.0.into()]);
+    impl From<Relation> for Relations {
+        fn from(relation: Relation) -> Self {
+            Self::from(vec![relation])
+        }
     }
 
-    /// Set a field in the paragraph
-    pub fn set(&mut self, key: &str, value: &str) {
-        let new_entry = Entry::new(key, value);
-
-        for entry in self.entries() {
-            if entry.key().as_deref() == Some(key) {
-                self.0.splice_children(
-                    entry.0.index()..entry.0.index() + 1,
-                    vec![new_entry.0.into()],
-                );
-                return;
+    fn inject(builder: &mut GreenNodeBuilder, node: SyntaxNode) {
+        builder.start_node(node.kind().into());
+        for child in node.children_with_tokens() {
+            match child {
+                rowan::NodeOrToken::Node(child) => {
+                    inject(builder, child);
+                }
+                rowan::NodeOrToken::Token(token) => {
+                    builder.token(token.kind().into(), token.text());
+                }
             }
-        }
-        let count = self.0.children_with_tokens().count();
-        self.0
-            .splice_children(count..count, vec![new_entry.0.into()]);
-    }
-
-    /// Rename the given field in the paragraph.
-    pub fn rename(&mut self, old_key: &str, new_key: &str) -> bool {
-        for entry in self.entries() {
-            if entry.key().as_deref() == Some(old_key) {
-                self.0.splice_children(
-                    entry.0.index()..entry.0.index() + 1,
-                    vec![Entry::new(new_key, entry.value().as_str()).0.into()],
-                );
-                return true;
-            }
-        }
-        false
-    }
-}
-
-impl Default for Paragraph {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl std::str::FromStr for Paragraph {
-    type Err = ParseError;
-
-    fn from_str(text: &str) -> Result<Self, Self::Err> {
-        let deb822 = Deb822::from_str(text)?;
-
-        let mut paragraphs = deb822.paragraphs();
-
-        paragraphs
-            .next()
-            .ok_or_else(|| ParseError(vec!["no paragraphs".to_string()]))
-    }
-}
-
-#[cfg(feature = "python-debian")]
-impl pyo3::ToPyObject for Paragraph {
-    fn to_object(&self, py: pyo3::Python) -> pyo3::PyObject {
-        use pyo3::prelude::*;
-        let d = pyo3::types::PyDict::new_bound(py);
-        for (k, v) in self.items() {
-            d.set_item(k, v).unwrap();
-        }
-        let m = py.import_bound("debian.deb822").unwrap();
-        let cls = m.getattr("Deb822").unwrap();
-        cls.call1((d,)).unwrap().to_object(py)
-    }
-}
-
-#[cfg(feature = "python-debian")]
-impl pyo3::FromPyObject<'_> for Paragraph {
-    fn extract_bound(obj: &pyo3::Bound<pyo3::PyAny>) -> pyo3::PyResult<Self> {
-        use pyo3::prelude::*;
-        let d = obj.call_method0("__str__")?.extract::<String>()?;
-        Ok(Paragraph::from_str(&d)
-            .map_err(|e| pyo3::exceptions::PyValueError::new_err((e.to_string(),)))?)
-    }
-}
-
-impl Entry {
-    /// Create a new entry with the given key and value.
-    pub fn new(key: &str, value: &str) -> Entry {
-        let mut builder = GreenNodeBuilder::new();
-
-        builder.start_node(ENTRY.into());
-        builder.token(KEY.into(), key);
-        builder.token(COLON.into(), ":");
-        builder.token(WHITESPACE.into(), " ");
-        for (i, line) in value.split('\n').enumerate() {
-            if i > 0 {
-                builder.token(INDENT.into(), " ");
-            }
-            builder.token(VALUE.into(), line);
-            builder.token(NEWLINE.into(), "\n");
         }
         builder.finish_node();
-        Entry(SyntaxNode::new_root_mut(builder.finish()))
     }
 
-    #[must_use]
-    /// Reformat this entry
-    ///
-    /// # Arguments
-    /// * `indentation` - The indentation to use
-    /// * `immediate_empty_line` - Whether multi-line values should always start with an empty line
-    /// * `max_line_length_one_liner` - If set, then this is the max length of the value if it is
-    ///    crammed into a "one-liner" value
-    /// * `format_value` - If set, then this function will format the value according to the given
-    ///    function
-    ///
-    /// # Returns
-    /// The reformatted entry
-    pub fn wrap_and_sort(
-        &self,
-        mut indentation: Indentation,
-        immediate_empty_line: bool,
-        max_line_length_one_liner: Option<usize>,
-        format_value: Option<&dyn Fn(&str, &str) -> String>,
-    ) -> Entry {
-        let mut builder = GreenNodeBuilder::new();
+    impl Relation {
+        /// Create a new relation
+        ///
+        /// # Arguments
+        /// * `name` - The name of the package
+        /// * `version_constraint` - The version constraint and version to use
+        ///
+        /// # Example
+        /// ```
+        /// use r_description::lossless::{Relation};
+        /// use r_description::relations::VersionConstraint;
+        /// let relation = Relation::new("vign", Some((VersionConstraint::GreaterThanEqual, "2.0".parse().unwrap())));
+        /// assert_eq!(relation.to_string(), "vign (>= 2.0)");
+        /// ```
+        pub fn new(name: &str, version_constraint: Option<(VersionConstraint, Version)>) -> Self {
+            let mut builder = GreenNodeBuilder::new();
+            builder.start_node(SyntaxKind::RELATION.into());
+            builder.token(IDENT.into(), name);
+            if let Some((vc, version)) = version_constraint {
+                builder.token(WHITESPACE.into(), " ");
+                builder.start_node(SyntaxKind::VERSION.into());
+                builder.token(L_PARENS.into(), "(");
+                builder.start_node(SyntaxKind::CONSTRAINT.into());
+                for c in vc.to_string().chars() {
+                    builder.token(
+                        match c {
+                            '>' => R_ANGLE.into(),
+                            '<' => L_ANGLE.into(),
+                            '=' => EQUAL.into(),
+                            _ => unreachable!(),
+                        },
+                        c.to_string().as_str(),
+                    );
+                }
+                builder.finish_node();
 
-        let mut content = vec![];
-        builder.start_node(ENTRY.into());
-        for c in self.0.children_with_tokens() {
-            let text = c.as_token().map(|t| t.text());
-            match c.kind() {
-                KEY => {
-                    builder.token(KEY.into(), text.unwrap());
-                    if indentation == Indentation::FieldNameLength {
-                        indentation = Indentation::Spaces(text.unwrap().len() as u32);
+                builder.token(WHITESPACE.into(), " ");
+
+                builder.token(IDENT.into(), version.to_string().as_str());
+
+                builder.token(R_PARENS.into(), ")");
+
+                builder.finish_node();
+            }
+
+            builder.finish_node();
+            Relation(SyntaxNode::new_root_mut(builder.finish()))
+        }
+
+        /// Wrap and sort this relation
+        ///
+        /// # Example
+        /// ```
+        /// use r_description::lossless::Relation;
+        /// let relation = "  vign  (  >= 2.0) ".parse::<Relation>().unwrap();
+        /// assert_eq!(relation.wrap_and_sort().to_string(), "vign (>= 2.0)");
+        /// ```
+        #[must_use]
+        pub fn wrap_and_sort(&self) -> Self {
+            let mut builder = GreenNodeBuilder::new();
+            builder.start_node(SyntaxKind::RELATION.into());
+            builder.token(IDENT.into(), self.name().as_str());
+            if let Some((vc, version)) = self.version() {
+                builder.token(WHITESPACE.into(), " ");
+                builder.start_node(SyntaxKind::VERSION.into());
+                builder.token(L_PARENS.into(), "(");
+                builder.start_node(SyntaxKind::CONSTRAINT.into());
+                builder.token(
+                    match vc {
+                        VersionConstraint::GreaterThanEqual => R_ANGLE.into(),
+                        VersionConstraint::LessThanEqual => L_ANGLE.into(),
+                        VersionConstraint::Equal => EQUAL.into(),
+                        VersionConstraint::GreaterThan => R_ANGLE.into(),
+                        VersionConstraint::LessThan => L_ANGLE.into(),
+                    },
+                    vc.to_string().as_str(),
+                );
+                builder.finish_node();
+                builder.token(WHITESPACE.into(), " ");
+                builder.token(IDENT.into(), version.to_string().as_str());
+                builder.token(R_PARENS.into(), ")");
+                builder.finish_node();
+            }
+            builder.finish_node();
+            Relation(SyntaxNode::new_root_mut(builder.finish()))
+        }
+
+        /// Create a new simple relation, without any version constraints.
+        ///
+        /// # Example
+        /// ```
+        /// use r_description::lossless::Relation;
+        /// let relation = Relation::simple("vign");
+        /// assert_eq!(relation.to_string(), "vign");
+        /// ```
+        pub fn simple(name: &str) -> Self {
+            Self::new(name, None)
+        }
+
+        /// Remove the version constraint from the relation.
+        ///
+        /// # Example
+        /// ```
+        /// use r_description::lossless::{Relation};
+        /// use r_description::relations::VersionConstraint;
+        /// let mut relation = Relation::new("vign", Some((VersionConstraint::GreaterThanEqual, "2.0".parse().unwrap())));
+        /// relation.drop_constraint();
+        /// assert_eq!(relation.to_string(), "vign");
+        /// ```
+        pub fn drop_constraint(&mut self) -> bool {
+            let version_token = self.0.children().find(|n| n.kind() == VERSION);
+            if let Some(version_token) = version_token {
+                // Remove any whitespace before the version token
+                while let Some(prev) = version_token.prev_sibling_or_token() {
+                    if prev.kind() == WHITESPACE || prev.kind() == NEWLINE {
+                        prev.detach();
+                    } else {
+                        break;
                     }
                 }
-                COLON => {
-                    builder.token(COLON.into(), ":");
-                }
-                INDENT => {
-                    // Discard original whitespace
-                }
-                ERROR | COMMENT | VALUE | WHITESPACE | NEWLINE => {
-                    content.push(c);
-                }
-                EMPTY_LINE | ENTRY | ROOT | PARAGRAPH => unreachable!(),
+                version_token.detach();
+                return true;
             }
+
+            false
         }
 
-        let indentation = if let crate::Indentation::Spaces(i) = indentation {
-            i
-        } else {
-            1
-        };
+        /// Return the name of the package in the relation.
+        ///
+        /// # Example
+        /// ```
+        /// use r_description::lossless::Relation;
+        /// let relation = Relation::simple("vign");
+        /// assert_eq!(relation.name(), "vign");
+        /// ```
+        pub fn name(&self) -> String {
+            self.0
+                .children_with_tokens()
+                .find_map(|it| match it {
+                    SyntaxElement::Token(token) if token.kind() == IDENT => Some(token),
+                    _ => None,
+                })
+                .unwrap()
+                .text()
+                .to_string()
+        }
 
-        assert!(indentation > 0);
+        /// Return the version constraint and the version it is constrained to.
+        pub fn version(&self) -> Option<(VersionConstraint, Version)> {
+            let vc = self.0.children().find(|n| n.kind() == VERSION);
+            let vc = vc.as_ref()?;
+            let constraint = vc.children().find(|n| n.kind() == CONSTRAINT);
 
-        // Strip trailing whitespace and newlines
-        while let Some(c) = content.last() {
-            if c.kind() == NEWLINE || c.kind() == WHITESPACE {
-                content.pop();
+            let version = vc.children_with_tokens().find_map(|it| match it {
+                SyntaxElement::Token(token) if token.kind() == IDENT => Some(token),
+                _ => None,
+            });
+
+            if let (Some(constraint), Some(version)) = (constraint, version) {
+                let vc: VersionConstraint = constraint.to_string().parse().unwrap();
+                return Some((vc, (version.text().to_string()).parse().unwrap()));
             } else {
-                break;
+                None
             }
         }
 
-        // Reformat iff there is a format function and the value
-        // has no errors or comments
-        let tokens = if let Some(ref format_value) = format_value {
-            if !content
-                .iter()
-                .any(|c| c.kind() == ERROR || c.kind() == COMMENT)
-            {
-                let concat = content
-                    .iter()
-                    .filter_map(|c| c.as_token().map(|t| t.text()))
-                    .collect::<String>();
-                let formatted = format_value(self.key().as_ref().unwrap(), &concat);
-                crate::lex::lex_inline(&formatted)
+        /// Set the version constraint for this relation
+        ///
+        /// # Example
+        /// ```
+        /// use r_description::lossless::{Relation};
+        /// use r_description::relations::VersionConstraint;
+        /// let mut relation = Relation::simple("vign");
+        /// relation.set_version(Some((VersionConstraint::GreaterThanEqual, "2.0".parse().unwrap())));
+        /// assert_eq!(relation.to_string(), "vign (>= 2.0)");
+        /// ```
+        pub fn set_version(&mut self, version_constraint: Option<(VersionConstraint, Version)>) {
+            let current_version = self.0.children().find(|n| n.kind() == VERSION);
+            if let Some((vc, version)) = version_constraint {
+                let mut builder = GreenNodeBuilder::new();
+                builder.start_node(VERSION.into());
+                builder.token(L_PARENS.into(), "(");
+                builder.start_node(CONSTRAINT.into());
+                match vc {
+                    VersionConstraint::GreaterThanEqual => {
+                        builder.token(R_ANGLE.into(), ">");
+                        builder.token(EQUAL.into(), "=");
+                    }
+                    VersionConstraint::LessThanEqual => {
+                        builder.token(L_ANGLE.into(), "<");
+                        builder.token(EQUAL.into(), "=");
+                    }
+                    VersionConstraint::Equal => {
+                        builder.token(EQUAL.into(), "=");
+                    }
+                    VersionConstraint::GreaterThan => {
+                        builder.token(R_ANGLE.into(), ">");
+                    }
+                    VersionConstraint::LessThan => {
+                        builder.token(L_ANGLE.into(), "<");
+                    }
+                }
+                builder.finish_node(); // CONSTRAINT
+                builder.token(WHITESPACE.into(), " ");
+                builder.token(IDENT.into(), version.to_string().as_str());
+                builder.token(R_PARENS.into(), ")");
+                builder.finish_node(); // VERSION
+
+                if let Some(current_version) = current_version {
+                    self.0.splice_children(
+                        current_version.index()..current_version.index() + 1,
+                        vec![SyntaxNode::new_root_mut(builder.finish()).into()],
+                    );
+                } else {
+                    let name_node = self.0.children_with_tokens().find(|n| n.kind() == IDENT);
+                    let idx = if let Some(name_node) = name_node {
+                        name_node.index() + 1
+                    } else {
+                        0
+                    };
+                    let new_children = vec![
+                        GreenToken::new(WHITESPACE.into(), " ").into(),
+                        builder.finish().into(),
+                    ];
+                    let new_root = SyntaxNode::new_root_mut(
+                        self.0.green().splice_children(idx..idx, new_children),
+                    );
+                    if let Some(parent) = self.0.parent() {
+                        parent.splice_children(
+                            self.0.index()..self.0.index() + 1,
+                            vec![new_root.into()],
+                        );
+                        self.0 = parent
+                            .children_with_tokens()
+                            .nth(self.0.index())
+                            .unwrap()
+                            .clone()
+                            .into_node()
+                            .unwrap();
+                    } else {
+                        self.0 = new_root;
+                    }
+                }
+            } else if let Some(current_version) = current_version {
+                // Remove any whitespace before the version token
+                while let Some(prev) = current_version.prev_sibling_or_token() {
+                    if prev.kind() == WHITESPACE || prev.kind() == NEWLINE {
+                        prev.detach();
+                    } else {
+                        break;
+                    }
+                }
+                current_version.detach();
+            }
+        }
+
+        /// Remove this relation
+        ///
+        /// # Example
+        /// ```
+        /// use r_description::lossless::{Relation, Relations};
+        /// let mut relations: Relations = r"cli (>= 0.19.0), blah (<< 1.26.0)".parse().unwrap();
+        /// let mut relation = relations.get_relation(0).unwrap();
+        /// assert_eq!(relation.to_string(), "cli (>= 0.19.0)");
+        /// relation.remove();
+        /// assert_eq!(relations.to_string(), "blah (<< 1.26.0)");
+        /// ```
+        pub fn remove(&mut self) {
+            let is_first = !self
+                .0
+                .siblings(Direction::Prev)
+                .skip(1)
+                .any(|n| n.kind() == RELATION);
+            if !is_first {
+                // Not the first item in the list. Remove whitespace backwards to the previous
+                // pipe, the pipe and any whitespace until the previous relation
+                while let Some(n) = self.0.prev_sibling_or_token() {
+                    if n.kind() == WHITESPACE || n.kind() == NEWLINE {
+                        n.detach();
+                    } else if n.kind() == COMMA {
+                        n.detach();
+                        break;
+                    } else {
+                        break;
+                    }
+                }
+                while let Some(n) = self.0.prev_sibling_or_token() {
+                    if n.kind() == WHITESPACE || n.kind() == NEWLINE {
+                        n.detach();
+                    } else {
+                        break;
+                    }
+                }
             } else {
-                content
-                    .into_iter()
-                    .map(|n| n.into_token().unwrap())
-                    .map(|i| (i.kind(), i.text().to_string()))
-                    .collect::<Vec<_>>()
+                // First item in the list. Remove whitespace up to the pipe, the pipe and anything
+                // before the next relation
+                while let Some(n) = self.0.next_sibling_or_token() {
+                    if n.kind() == WHITESPACE || n.kind() == NEWLINE {
+                        n.detach();
+                    } else if n.kind() == COMMA {
+                        n.detach();
+                        break;
+                    } else {
+                        panic!("Unexpected node: {:?}", n);
+                    }
+                }
+
+                while let Some(n) = self.0.next_sibling_or_token() {
+                    if n.kind() == WHITESPACE || n.kind() == NEWLINE {
+                        n.detach();
+                    } else {
+                        break;
+                    }
+                }
             }
-        } else {
-            content
-                .into_iter()
-                .map(|n| n.into_token().unwrap())
-                .map(|i| (i.kind(), i.text().to_string()))
-                .collect::<Vec<_>>()
-        };
-
-        rebuild_value(
-            &mut builder,
-            tokens,
-            self.key().map_or(0, |k| k.len()),
-            indentation,
-            immediate_empty_line,
-            max_line_length_one_liner,
-        );
-
-        builder.finish_node();
-        Self(SyntaxNode::new_root_mut(builder.finish()))
-    }
-
-    /// Returns the key of the entry.
-    pub fn key(&self) -> Option<String> {
-        self.0
-            .children_with_tokens()
-            .filter_map(|it| it.into_token())
-            .find(|it| it.kind() == KEY)
-            .map(|it| it.text().to_string())
-    }
-
-    /// Returns the value of the entry.
-    pub fn value(&self) -> String {
-        self.0
-            .children_with_tokens()
-            .filter_map(|it| it.into_token())
-            .filter(|it| it.kind() == VALUE)
-            .map(|it| it.text().to_string())
-            .collect::<Vec<_>>()
-            .join("\n")
-    }
-
-    /// Detach this entry from the paragraph.
-    pub fn detach(&mut self) {
-        self.0.detach();
-    }
-}
-
-impl FromStr for Deb822 {
-    type Err = ParseError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let parsed = parse(s);
-        if parsed.errors.is_empty() {
-            Ok(parsed.root_mut())
-        } else {
-            Err(ParseError(parsed.errors))
+            self.0.detach();
         }
-    }
-}
 
-#[test]
-fn test_parse_simple() {
-    const CONTROLV1: &str = r#"Source: foo
-Maintainer: Foo Bar <foo@example.com>
-Section: net
-
-# This is a comment
-
-Package: foo
-Architecture: all
-Depends:
- bar,
- blah
-Description: This is a description
- And it is
- .
- multiple
- lines
-"#;
-    let parsed = parse(CONTROLV1);
-    let node = parsed.syntax();
-    assert_eq!(
-        format!("{:#?}", node),
-        r###"ROOT@0..203
-  PARAGRAPH@0..63
-    ENTRY@0..12
-      KEY@0..6 "Source"
-      COLON@6..7 ":"
-      WHITESPACE@7..8 " "
-      VALUE@8..11 "foo"
-      NEWLINE@11..12 "\n"
-    ENTRY@12..50
-      KEY@12..22 "Maintainer"
-      COLON@22..23 ":"
-      WHITESPACE@23..24 " "
-      VALUE@24..49 "Foo Bar <foo@example. ..."
-      NEWLINE@49..50 "\n"
-    ENTRY@50..63
-      KEY@50..57 "Section"
-      COLON@57..58 ":"
-      WHITESPACE@58..59 " "
-      VALUE@59..62 "net"
-      NEWLINE@62..63 "\n"
-  EMPTY_LINE@63..64
-    NEWLINE@63..64 "\n"
-  EMPTY_LINE@64..84
-    COMMENT@64..83 "# This is a comment"
-    NEWLINE@83..84 "\n"
-  EMPTY_LINE@84..85
-    NEWLINE@84..85 "\n"
-  PARAGRAPH@85..203
-    ENTRY@85..98
-      KEY@85..92 "Package"
-      COLON@92..93 ":"
-      WHITESPACE@93..94 " "
-      VALUE@94..97 "foo"
-      NEWLINE@97..98 "\n"
-    ENTRY@98..116
-      KEY@98..110 "Architecture"
-      COLON@110..111 ":"
-      WHITESPACE@111..112 " "
-      VALUE@112..115 "all"
-      NEWLINE@115..116 "\n"
-    ENTRY@116..137
-      KEY@116..123 "Depends"
-      COLON@123..124 ":"
-      NEWLINE@124..125 "\n"
-      INDENT@125..126 " "
-      VALUE@126..130 "bar,"
-      NEWLINE@130..131 "\n"
-      INDENT@131..132 " "
-      VALUE@132..136 "blah"
-      NEWLINE@136..137 "\n"
-    ENTRY@137..203
-      KEY@137..148 "Description"
-      COLON@148..149 ":"
-      WHITESPACE@149..150 " "
-      VALUE@150..171 "This is a description"
-      NEWLINE@171..172 "\n"
-      INDENT@172..173 " "
-      VALUE@173..182 "And it is"
-      NEWLINE@182..183 "\n"
-      INDENT@183..184 " "
-      VALUE@184..185 "."
-      NEWLINE@185..186 "\n"
-      INDENT@186..187 " "
-      VALUE@187..195 "multiple"
-      NEWLINE@195..196 "\n"
-      INDENT@196..197 " "
-      VALUE@197..202 "lines"
-      NEWLINE@202..203 "\n"
-"###
-    );
-    assert_eq!(parsed.errors, Vec::<String>::new());
-
-    let root = parsed.root_mut();
-    assert_eq!(root.paragraphs().count(), 2);
-    let source = root.paragraphs().next().unwrap();
-    assert_eq!(
-        source.keys().collect::<Vec<_>>(),
-        vec!["Source", "Maintainer", "Section"]
-    );
-    assert_eq!(source.get("Source").as_deref(), Some("foo"));
-    assert_eq!(
-        source.get("Maintainer").as_deref(),
-        Some("Foo Bar <foo@example.com>")
-    );
-    assert_eq!(source.get("Section").as_deref(), Some("net"));
-    assert_eq!(
-        source.items().collect::<Vec<_>>(),
-        vec![
-            ("Source".into(), "foo".into()),
-            ("Maintainer".into(), "Foo Bar <foo@example.com>".into()),
-            ("Section".into(), "net".into()),
-        ]
-    );
-
-    let binary = root.paragraphs().nth(1).unwrap();
-    assert_eq!(
-        binary.keys().collect::<Vec<_>>(),
-        vec!["Package", "Architecture", "Depends", "Description"]
-    );
-    assert_eq!(binary.get("Package").as_deref(), Some("foo"));
-    assert_eq!(binary.get("Architecture").as_deref(), Some("all"));
-    assert_eq!(binary.get("Depends").as_deref(), Some("bar,\nblah"));
-    assert_eq!(
-        binary.get("Description").as_deref(),
-        Some("This is a description\nAnd it is\n.\nmultiple\nlines")
-    );
-
-    assert_eq!(node.text(), CONTROLV1);
-}
-
-#[test]
-fn test_with_trailing_whitespace() {
-    const CONTROLV1: &str = r#"Source: foo
-Maintainer: Foo Bar <foo@example.com>
-
-
-"#;
-    let parsed = parse(CONTROLV1);
-    let node = parsed.syntax();
-    assert_eq!(
-        format!("{:#?}", node),
-        r###"ROOT@0..52
-  PARAGRAPH@0..50
-    ENTRY@0..12
-      KEY@0..6 "Source"
-      COLON@6..7 ":"
-      WHITESPACE@7..8 " "
-      VALUE@8..11 "foo"
-      NEWLINE@11..12 "\n"
-    ENTRY@12..50
-      KEY@12..22 "Maintainer"
-      COLON@22..23 ":"
-      WHITESPACE@23..24 " "
-      VALUE@24..49 "Foo Bar <foo@example. ..."
-      NEWLINE@49..50 "\n"
-  EMPTY_LINE@50..51
-    NEWLINE@50..51 "\n"
-  EMPTY_LINE@51..52
-    NEWLINE@51..52 "\n"
-"###
-    );
-    assert_eq!(parsed.errors, Vec::<String>::new());
-
-    let root = parsed.root_mut();
-    assert_eq!(root.paragraphs().count(), 1);
-    let source = root.paragraphs().next().unwrap();
-    assert_eq!(
-        source.items().collect::<Vec<_>>(),
-        vec![
-            ("Source".into(), "foo".into()),
-            ("Maintainer".into(), "Foo Bar <foo@example.com>".into()),
-        ]
-    );
-}
-
-fn rebuild_value(
-    builder: &mut GreenNodeBuilder,
-    mut tokens: Vec<(SyntaxKind, String)>,
-    key_len: usize,
-    indentation: u32,
-    immediate_empty_line: bool,
-    max_line_length_one_liner: Option<usize>,
-) {
-    let first_line_len = tokens
-        .iter()
-        .take_while(|(k, _t)| *k != NEWLINE)
-        .map(|(_k, t)| t.len())
-        .sum::<usize>() + key_len + 2 /* ": " */;
-
-    let has_newline = tokens.iter().any(|(k, _t)| *k == NEWLINE);
-
-    let mut last_was_newline = false;
-    if max_line_length_one_liner
-        .map(|mll| first_line_len <= mll)
-        .unwrap_or(false)
-        && !has_newline
-    {
-        // Just copy tokens if the value fits into one line
-        for (k, t) in tokens {
-            builder.token(k.into(), &t);
-        }
-    } else {
-        // Insert a leading newline if the value is multi-line and immediate_empty_line is set
-        if immediate_empty_line && has_newline {
-            builder.token(NEWLINE.into(), "\n");
-            last_was_newline = true;
-        } else {
-            builder.token(WHITESPACE.into(), " ");
-        }
-        // Strip leading whitespace and newlines
-        while let Some((k, _t)) = tokens.first() {
-            if *k == NEWLINE || *k == WHITESPACE {
-                tokens.remove(0);
+        /// Check if this relation is satisfied by the given package version.
+        pub fn satisfied_by(
+            &self,
+            package_version: impl crate::relations::VersionLookup + Copy,
+        ) -> bool {
+            let name = self.name();
+            let version = self.version();
+            if let Some(version) = version {
+                if let Some(package_version) = package_version.lookup_version(&name) {
+                    match version.0 {
+                        VersionConstraint::GreaterThanEqual => {
+                            package_version.into_owned() >= version.1
+                        }
+                        VersionConstraint::LessThanEqual => {
+                            package_version.into_owned() <= version.1
+                        }
+                        VersionConstraint::Equal => package_version.into_owned() == version.1,
+                        VersionConstraint::GreaterThan => package_version.into_owned() > version.1,
+                        VersionConstraint::LessThan => package_version.into_owned() < version.1,
+                    }
+                } else {
+                    false
+                }
             } else {
-                break;
+                true
             }
-        }
-        for (k, t) in tokens {
-            if last_was_newline {
-                builder.token(INDENT.into(), &" ".repeat(indentation as usize));
-            }
-            builder.token(k.into(), &t);
-            last_was_newline = k == NEWLINE;
         }
     }
 
-    if !last_was_newline {
-        builder.token(NEWLINE.into(), "\n");
+    impl PartialOrd for Relation {
+        fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+            // Compare by name first, then by version
+            let name_cmp = self.name().cmp(&other.name());
+            if name_cmp != std::cmp::Ordering::Equal {
+                return Some(name_cmp);
+            }
+
+            let self_version = self.version();
+            let other_version = other.version();
+
+            match (self_version, other_version) {
+                (Some((self_vc, self_version)), Some((other_vc, other_version))) => {
+                    let vc_cmp = self_vc.cmp(&other_vc);
+                    if vc_cmp != std::cmp::Ordering::Equal {
+                        return Some(vc_cmp);
+                    }
+
+                    Some(self_version.cmp(&other_version))
+                }
+                (Some(_), None) => Some(std::cmp::Ordering::Greater),
+                (None, Some(_)) => Some(std::cmp::Ordering::Less),
+                (None, None) => Some(std::cmp::Ordering::Equal),
+            }
+        }
+    }
+
+    impl Eq for Relation {}
+
+    impl Ord for Relation {
+        fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+            self.partial_cmp(other).unwrap()
+        }
+    }
+
+    impl std::str::FromStr for Relations {
+        type Err = String;
+
+        fn from_str(s: &str) -> Result<Self, Self::Err> {
+            let parse = parse(s);
+            if parse.errors.is_empty() {
+                Ok(parse.root_mut())
+            } else {
+                Err(parse.errors.join("\n"))
+            }
+        }
+    }
+
+    impl std::str::FromStr for Relation {
+        type Err = String;
+
+        fn from_str(s: &str) -> Result<Self, Self::Err> {
+            let rels = s.parse::<Relations>()?;
+            let mut relations = rels.relations();
+
+            let relation = if let Some(relation) = relations.next() {
+                relation
+            } else {
+                return Err("No relation found".to_string());
+            };
+
+            if relations.next().is_some() {
+                return Err("Multiple relations found".to_string());
+            }
+
+            Ok(relation)
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn test_parse() {
+            let input = "cli";
+            let parsed: Relations = input.parse().unwrap();
+            assert_eq!(parsed.to_string(), input);
+            assert_eq!(parsed.relations().count(), 1);
+            let relation = parsed.relations().next().unwrap();
+            assert_eq!(relation.to_string(), "cli");
+            assert_eq!(relation.version(), None);
+
+            let input = "cli (>= 0.20.21)";
+            let parsed: Relations = input.parse().unwrap();
+            assert_eq!(parsed.to_string(), input);
+            assert_eq!(parsed.relations().count(), 1);
+            let relation = parsed.relations().next().unwrap();
+            assert_eq!(relation.to_string(), "cli (>= 0.20.21)");
+            assert_eq!(
+                relation.version(),
+                Some((
+                    VersionConstraint::GreaterThanEqual,
+                    "0.20.21".parse().unwrap()
+                ))
+            );
+        }
+
+        #[test]
+        fn test_multiple() {
+            let input = "cli (>= 0.20.21), cli (<< 0.21)";
+            let parsed: Relations = input.parse().unwrap();
+            assert_eq!(parsed.to_string(), input);
+            assert_eq!(parsed.relations().count(), 2);
+            let relation = parsed.relations().next().unwrap();
+            assert_eq!(relation.to_string(), "cli (>= 0.20.21)");
+            assert_eq!(
+                relation.version(),
+                Some((
+                    VersionConstraint::GreaterThanEqual,
+                    "0.20.21".parse().unwrap()
+                ))
+            );
+            let relation = parsed.relations().nth(1).unwrap();
+            assert_eq!(relation.to_string(), "cli (<< 0.21)");
+            assert_eq!(
+                relation.version(),
+                Some((VersionConstraint::LessThan, "0.21".parse().unwrap()))
+            );
+        }
+
+        #[test]
+        fn test_new() {
+            let r = Relation::new(
+                "cli",
+                Some((VersionConstraint::GreaterThanEqual, "2.0".parse().unwrap())),
+            );
+
+            assert_eq!(r.to_string(), "cli (>= 2.0)");
+        }
+
+        #[test]
+        fn test_drop_constraint() {
+            let mut r = Relation::new(
+                "cli",
+                Some((VersionConstraint::GreaterThanEqual, "2.0".parse().unwrap())),
+            );
+
+            r.drop_constraint();
+
+            assert_eq!(r.to_string(), "cli");
+        }
+
+        #[test]
+        fn test_simple() {
+            let r = Relation::simple("cli");
+
+            assert_eq!(r.to_string(), "cli");
+        }
+
+        #[test]
+        fn test_remove_first_relation() {
+            let mut rels: Relations = r#"cli (>= 0.20.21), cli (<< 0.21)"#.parse().unwrap();
+            let removed = rels.remove_relation(0);
+            assert_eq!(removed.to_string(), "cli (>= 0.20.21)");
+            assert_eq!(rels.to_string(), "cli (<< 0.21)");
+        }
+
+        #[test]
+        fn test_remove_last_relation() {
+            let mut rels: Relations = r#"cli (>= 0.20.21), cli (<< 0.21)"#.parse().unwrap();
+            rels.remove_relation(1);
+            assert_eq!(rels.to_string(), "cli (>= 0.20.21)");
+        }
+
+        #[test]
+        fn test_remove_middle() {
+            let mut rels: Relations =
+                r#"cli (>= 0.20.21), cli (<< 0.21), cli (<< 0.22)"#.parse().unwrap();
+            rels.remove_relation(1);
+            assert_eq!(rels.to_string(), "cli (>= 0.20.21), cli (<< 0.22)");
+        }
+
+        #[test]
+        fn test_remove_added() {
+            let mut rels: Relations = r#"cli (>= 0.20.21)"#.parse().unwrap();
+            let relation = Relation::simple("cli");
+            rels.push(relation);
+            rels.remove_relation(1);
+            assert_eq!(rels.to_string(), "cli (>= 0.20.21)");
+        }
+
+        #[test]
+        fn test_push() {
+            let mut rels: Relations = r#"cli (>= 0.20.21)"#.parse().unwrap();
+            let relation = Relation::simple("cli");
+            rels.push(relation);
+            assert_eq!(rels.to_string(), "cli (>= 0.20.21), cli");
+        }
+
+        #[test]
+        fn test_push_from_empty() {
+            let mut rels: Relations = "".parse().unwrap();
+            let relation = Relation::simple("cli");
+            rels.push(relation);
+            assert_eq!(rels.to_string(), "cli");
+        }
+
+        #[test]
+        fn test_insert() {
+            let mut rels: Relations = r#"cli (>= 0.20.21), cli (<< 0.21)"#.parse().unwrap();
+            let relation = Relation::simple("cli");
+            rels.insert(1, relation);
+            assert_eq!(rels.to_string(), "cli (>= 0.20.21), cli, cli (<< 0.21)");
+        }
+
+        #[test]
+        fn test_insert_at_start() {
+            let mut rels: Relations = r#"cli (>= 0.20.21), cli (<< 0.21)"#.parse().unwrap();
+            let relation = Relation::simple("cli");
+            rels.insert(0, relation);
+            assert_eq!(rels.to_string(), "cli, cli (>= 0.20.21), cli (<< 0.21)");
+        }
+
+        #[test]
+        fn test_insert_after_error() {
+            let (mut rels, errors) = Relations::parse_relaxed("@foo@, debhelper (>= 1.0)");
+            assert_eq!(
+                errors,
+                vec![
+                    "expected identifier or comma but got ERROR",
+                    "expected comma or end of file but got Some(IDENT)",
+                    "expected identifier or comma but got ERROR"
+                ]
+            );
+            let relation = Relation::simple("bar");
+            rels.push(relation);
+            assert_eq!(rels.to_string(), "@foo@, debhelper (>= 1.0), bar");
+        }
+
+        #[test]
+        fn test_insert_before_error() {
+            let (mut rels, errors) = Relations::parse_relaxed("debhelper (>= 1.0), @foo@, bla");
+            assert_eq!(
+                errors,
+                vec![
+                    "expected identifier or comma but got ERROR",
+                    "expected comma or end of file but got Some(IDENT)",
+                    "expected identifier or comma but got ERROR"
+                ]
+            );
+            let relation = Relation::simple("bar");
+            rels.insert(0, relation);
+            assert_eq!(rels.to_string(), "bar, debhelper (>= 1.0), @foo@, bla");
+        }
+
+        #[test]
+        fn test_replace() {
+            let mut rels: Relations = r#"cli (>= 0.20.21), cli (<< 0.21)"#.parse().unwrap();
+            let relation = Relation::simple("cli");
+            rels.replace(1, relation);
+            assert_eq!(rels.to_string(), "cli (>= 0.20.21), cli");
+        }
+
+        #[test]
+        fn test_parse_relation() {
+            let parsed: Relation = "cli (>= 0.20.21)".parse().unwrap();
+            assert_eq!(parsed.to_string(), "cli (>= 0.20.21)");
+            assert_eq!(
+                parsed.version(),
+                Some((
+                    VersionConstraint::GreaterThanEqual,
+                    "0.20.21".parse().unwrap()
+                ))
+            );
+            assert_eq!(
+                "foo, bar".parse::<Relation>().unwrap_err(),
+                "Multiple relations found"
+            );
+            assert_eq!("".parse::<Relation>().unwrap_err(), "No relation found");
+        }
+
+        #[test]
+        fn test_relations_satisfied_by() {
+            let rels: Relations = "cli (>= 0.20.21), cli (<< 0.21)".parse().unwrap();
+            let satisfied = |name: &str| -> Option<Version> {
+                match name {
+                    "cli" => Some("0.20.21".parse().unwrap()),
+                    _ => None,
+                }
+            };
+            assert!(rels.satisfied_by(satisfied));
+
+            let satisfied = |name: &str| match name {
+                "cli" => Some("0.21".parse().unwrap()),
+                _ => None,
+            };
+            assert!(!rels.satisfied_by(satisfied));
+
+            let satisfied = |name: &str| match name {
+                "cli" => Some("0.20.20".parse().unwrap()),
+                _ => None,
+            };
+            assert!(!rels.satisfied_by(satisfied));
+        }
+
+        #[test]
+        fn test_wrap_and_sort_relation() {
+            let relation: Relation = "   cli   (>=   11.0)".parse().unwrap();
+
+            let wrapped = relation.wrap_and_sort();
+
+            assert_eq!(wrapped.to_string(), "cli (>= 11.0)");
+        }
+
+        #[test]
+        fn test_wrap_and_sort_relations() {
+            let relations: Relations = "cli (>= 0.20.21)  , \n\n\n\ncli (<< 0.21)".parse().unwrap();
+
+            let wrapped = relations.wrap_and_sort();
+
+            assert_eq!(wrapped.to_string(), "cli (<< 0.21), cli (>= 0.20.21)");
+        }
+
+        #[cfg(feature = "serde")]
+        #[test]
+        fn test_serialize_relations() {
+            let relations: Relations = "cli (>= 0.20.21), cli (<< 0.21)".parse().unwrap();
+            let serialized = serde_json::to_string(&relations).unwrap();
+            assert_eq!(serialized, r#""cli (>= 0.20.21), cli (<< 0.21)""#);
+        }
+
+        #[cfg(feature = "serde")]
+        #[test]
+        fn test_deserialize_relations() {
+            let relations: Relations = "cli (>= 0.20.21), cli (<< 0.21)".parse().unwrap();
+            let serialized = serde_json::to_string(&relations).unwrap();
+            let deserialized: Relations = serde_json::from_str(&serialized).unwrap();
+            assert_eq!(deserialized.to_string(), relations.to_string());
+        }
+
+        #[cfg(feature = "serde")]
+        #[test]
+        fn test_serialize_relation() {
+            let relation: Relation = "cli (>= 0.20.21)".parse().unwrap();
+            let serialized = serde_json::to_string(&relation).unwrap();
+            assert_eq!(serialized, r#""cli (>= 0.20.21)""#);
+        }
+
+        #[cfg(feature = "serde")]
+        #[test]
+        fn test_deserialize_relation() {
+            let relation: Relation = "cli (>= 0.20.21)".parse().unwrap();
+            let serialized = serde_json::to_string(&relation).unwrap();
+            let deserialized: Relation = serde_json::from_str(&serialized).unwrap();
+            assert_eq!(deserialized.to_string(), relation.to_string());
+        }
+
+        #[test]
+        fn test_relation_set_version() {
+            let mut rel: Relation = "vign".parse().unwrap();
+            rel.set_version(None);
+            assert_eq!("vign", rel.to_string());
+            rel.set_version(Some((
+                VersionConstraint::GreaterThanEqual,
+                "2.0".parse().unwrap(),
+            )));
+            assert_eq!("vign (>= 2.0)", rel.to_string());
+            rel.set_version(None);
+            assert_eq!("vign", rel.to_string());
+            rel.set_version(Some((
+                VersionConstraint::GreaterThanEqual,
+                "2.0".parse().unwrap(),
+            )));
+            rel.set_version(Some((
+                VersionConstraint::GreaterThanEqual,
+                "1.1".parse().unwrap(),
+            )));
+            assert_eq!("vign (>= 1.1)", rel.to_string());
+        }
+
+        #[test]
+        fn test_wrap_and_sort_removes_empty_entries() {
+            let relations: Relations = "foo, , bar, ".parse().unwrap();
+            let wrapped = relations.wrap_and_sort();
+            assert_eq!(wrapped.to_string(), "bar, foo");
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
     fn test_parse() {
-        let d: super::Deb822 = r#"Source: foo
-Maintainer: Foo Bar <jelmer@jelmer.uk>
-Section: net
+        let s = r###"Package: mypackage
+Title: What the Package Does (One Line, Title Case)
+Version: 0.0.0.9000
+Authors@R: 
+    person("First", "Last", , "first.last@example.com", role = c("aut", "cre"),
+           comment = c(ORCID = "YOUR-ORCID-ID"))
+Description: What the package does (one paragraph).
+License: `use_mit_license()`, `use_gpl3_license()` or friends to pick a
+    license
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.3.2
+"###;
+        let desc: RDescription = s.parse().unwrap();
 
-Package: foo
-Architecture: all
-Depends: libc6
-Description: This is a description
- With details
- "#
-        .parse()
-        .unwrap();
-        let mut ps = d.paragraphs();
-        let p = ps.next().unwrap();
-
-        assert_eq!(p.get("Source").as_deref(), Some("foo"));
+        assert_eq!(desc.package(), Some("mypackage".to_string()));
         assert_eq!(
-            p.get("Maintainer").as_deref(),
-            Some("Foo Bar <jelmer@jelmer.uk>")
+            desc.title(),
+            Some("What the Package Does (One Line, Title Case)".to_string())
         );
-        assert_eq!(p.get("Section").as_deref(), Some("net"));
+        assert_eq!(desc.version(), Some("0.0.0.9000".to_string()));
+        assert_eq!(
+            desc.authors(),
+            Some(RCode(
+                r#"person("First", "Last", , "first.last@example.com", role = c("aut", "cre"),
+comment = c(ORCID = "YOUR-ORCID-ID"))"#
+                    .to_string()
+            ))
+        );
+        assert_eq!(
+            desc.description(),
+            Some("What the package does (one paragraph).".to_string())
+        );
+        assert_eq!(
+            desc.license(),
+            Some(
+                "`use_mit_license()`, `use_gpl3_license()` or friends to pick a\nlicense"
+                    .to_string()
+            )
+        );
+        assert_eq!(desc.encoding(), Some("UTF-8".to_string()));
+        assert_eq!(desc.roxygen(), Some("list(markdown = TRUE)".to_string()));
+        assert_eq!(desc.roxygen_note(), Some("7.3.2".to_string()));
 
-        let b = ps.next().unwrap();
-        assert_eq!(b.get("Package").as_deref(), Some("foo"));
+        assert_eq!(desc.to_string(), s);
     }
 
     #[test]
-    fn test_after_multi_line() {
-        let d: super::Deb822 = r#"Source: golang-github-blah-blah
-Section: devel
-Priority: optional
-Standards-Version: 4.2.0
-Maintainer: Some Maintainer <example@example.com>
-Build-Depends: debhelper (>= 11~),
-               dh-golang,
-               golang-any
-Homepage: https://github.com/j-keck/arping
-"#
-        .parse()
-        .unwrap();
-        let mut ps = d.paragraphs();
-        let p = ps.next().unwrap();
-        assert_eq!(p.get("Source").as_deref(), Some("golang-github-blah-blah"));
-        assert_eq!(p.get("Section").as_deref(), Some("devel"));
-        assert_eq!(p.get("Priority").as_deref(), Some("optional"));
-        assert_eq!(p.get("Standards-Version").as_deref(), Some("4.2.0"));
+    fn test_parse_dplyr() {
+        let s = include_str!("../testdata/dplyr.desc");
+
+        let desc: RDescription = s.parse().unwrap();
+        assert_eq!("dplyr", desc.package().unwrap());
         assert_eq!(
-            p.get("Maintainer").as_deref(),
-            Some("Some Maintainer <example@example.com>")
-        );
-        assert_eq!(
-            p.get("Build-Depends").as_deref(),
-            Some("debhelper (>= 11~),\ndh-golang,\ngolang-any")
-        );
-        assert_eq!(
-            p.get("Homepage").as_deref(),
-            Some("https://github.com/j-keck/arping")
-        );
-    }
-
-    #[test]
-    fn test_remove_field() {
-        let d: super::Deb822 = r#"Source: foo
-# Comment
-Maintainer: Foo Bar <jelmer@jelmer.uk>
-Section: net
-
-Package: foo
-Architecture: all
-Depends: libc6
-Description: This is a description
- With details
- "#
-        .parse()
-        .unwrap();
-        let mut ps = d.paragraphs();
-        let mut p = ps.next().unwrap();
-        p.set("Foo", "Bar");
-        p.remove("Section");
-        p.remove("Nonexistant");
-        assert_eq!(p.get("Foo").as_deref(), Some("Bar"));
-        assert_eq!(
-            p.to_string(),
-            r#"Source: foo
-# Comment
-Maintainer: Foo Bar <jelmer@jelmer.uk>
-Foo: Bar
-"#
-        );
-    }
-
-    #[test]
-    fn test_rename_field() {
-        let d: super::Deb822 = r#"Source: foo
-Vcs-Browser: https://salsa.debian.org/debian/foo
-"#
-        .parse()
-        .unwrap();
-        let mut ps = d.paragraphs();
-        let mut p = ps.next().unwrap();
-        assert!(p.rename("Vcs-Browser", "Homepage"));
-        assert_eq!(
-            p.to_string(),
-            r#"Source: foo
-Homepage: https://salsa.debian.org/debian/foo
-"#
-        );
-
-        assert_eq!(
-            p.get("Homepage").as_deref(),
-            Some("https://salsa.debian.org/debian/foo")
-        );
-        assert_eq!(p.get("Vcs-Browser").as_deref(), None);
-
-        // Nonexistent field
-        assert!(!p.rename("Nonexistent", "Homepage"));
-    }
-
-    #[test]
-    fn test_set_field() {
-        let d: super::Deb822 = r#"Source: foo
-Maintainer: Foo Bar <joe@example.com>
-"#
-        .parse()
-        .unwrap();
-        let mut ps = d.paragraphs();
-        let mut p = ps.next().unwrap();
-        p.set("Maintainer", "Somebody Else <jane@example.com>");
-        assert_eq!(
-            p.get("Maintainer").as_deref(),
-            Some("Somebody Else <jane@example.com>")
-        );
-        assert_eq!(
-            p.to_string(),
-            r#"Source: foo
-Maintainer: Somebody Else <jane@example.com>
-"#
-        );
-    }
-
-    #[test]
-    fn test_set_new_field() {
-        let d: super::Deb822 = r#"Source: foo
-"#
-        .parse()
-        .unwrap();
-        let mut ps = d.paragraphs();
-        let mut p = ps.next().unwrap();
-        p.set("Maintainer", "Somebody <joe@example.com>");
-        assert_eq!(
-            p.get("Maintainer").as_deref(),
-            Some("Somebody <joe@example.com>")
-        );
-        assert_eq!(
-            p.to_string(),
-            r#"Source: foo
-Maintainer: Somebody <joe@example.com>
-"#
-        );
-    }
-
-    #[test]
-    fn test_add_paragraph() {
-        let mut d = super::Deb822::new();
-        let mut p = d.add_paragraph();
-        p.set("Foo", "Bar");
-        assert_eq!(p.get("Foo").as_deref(), Some("Bar"));
-        assert_eq!(
-            p.to_string(),
-            r#"Foo: Bar
-"#
-        );
-        assert_eq!(
-            d.to_string(),
-            r#"Foo: Bar
-"#
-        );
-
-        let mut p = d.add_paragraph();
-        p.set("Foo", "Blah");
-        assert_eq!(p.get("Foo").as_deref(), Some("Blah"));
-        assert_eq!(
-            d.to_string(),
-            r#"Foo: Bar
-
-Foo: Blah
-"#
-        );
-    }
-
-    #[test]
-    fn test_multiline_entry() {
-        use super::SyntaxKind::*;
-        use rowan::ast::AstNode;
-
-        let entry = super::Entry::new("foo", "bar\nbaz");
-        let tokens: Vec<_> = entry
-            .syntax()
-            .descendants_with_tokens()
-            .filter_map(|tok| tok.into_token())
-            .collect();
-
-        assert_eq!("foo: bar\n baz\n", entry.to_string());
-        assert_eq!("bar\nbaz", entry.value());
-
-        assert_eq!(
-            vec![
-                (KEY, "foo"),
-                (COLON, ":"),
-                (WHITESPACE, " "),
-                (VALUE, "bar"),
-                (NEWLINE, "\n"),
-                (INDENT, " "),
-                (VALUE, "baz"),
-                (NEWLINE, "\n"),
-            ],
-            tokens
-                .iter()
-                .map(|token| (token.kind(), token.text()))
-                .collect::<Vec<_>>()
-        );
-    }
-
-    #[test]
-    fn test_apt_entry() {
-        let text = r#"Package: cvsd
-Binary: cvsd
-Version: 1.0.24
-Maintainer: Arthur de Jong <adejong@debian.org>
-Build-Depends: debhelper (>= 9), po-debconf
-Architecture: any
-Standards-Version: 3.9.3
-Format: 3.0 (native)
-Files:
- b7a7d67a02974c52c408fdb5e118406d 890 cvsd_1.0.24.dsc
- b73ee40774c3086cb8490cdbb96ac883 258139 cvsd_1.0.24.tar.gz
-Vcs-Browser: http://arthurdejong.org/viewvc/cvsd/
-Vcs-Cvs: :pserver:anonymous@arthurdejong.org:/arthur/
-Checksums-Sha256:
- a7bb7a3aacee19cd14ce5c26cb86e348b1608e6f1f6e97c6ea7c58efa440ac43 890 cvsd_1.0.24.dsc
- 46bc517760c1070ae408693b89603986b53e6f068ae6bdc744e2e830e46b8cba 258139 cvsd_1.0.24.tar.gz
-Homepage: http://arthurdejong.org/cvsd/
-Package-List:
- cvsd deb vcs optional
-Directory: pool/main/c/cvsd
-Priority: source
-Section: vcs
-
-"#;
-        let d: super::Deb822 = text.parse().unwrap();
-        let p = d.paragraphs().next().unwrap();
-        assert_eq!(p.get("Binary").as_deref(), Some("cvsd"));
-        assert_eq!(p.get("Version").as_deref(), Some("1.0.24"));
-        assert_eq!(
-            p.get("Maintainer").as_deref(),
-            Some("Arthur de Jong <adejong@debian.org>")
-        );
-    }
-
-    #[test]
-    fn test_format() {
-        let d: super::Deb822 = r#"Source: foo
-Maintainer: Foo Bar <foo@example.com>
-Section:      net
-Blah: blah  # comment
-Multi-Line:
-  Ahoi!
-     Matey!
-
-"#
-        .parse()
-        .unwrap();
-        let mut ps = d.paragraphs();
-        let p = ps.next().unwrap();
-        let result = p.wrap_and_sort(
-            crate::Indentation::FieldNameLength,
-            false,
-            None,
-            None::<&dyn Fn(&super::Entry, &super::Entry) -> std::cmp::Ordering>,
-            None,
-        );
-        assert_eq!(
-            result.to_string(),
-            r#"Source: foo
-Maintainer: Foo Bar <foo@example.com>
-Section: net
-Blah: blah  # comment
-Multi-Line: Ahoi!
-          Matey!
-"#
-        );
-    }
-
-    #[test]
-    fn test_format_sort_paragraphs() {
-        let d: super::Deb822 = r#"Source: foo
-Maintainer: Foo Bar <foo@example.com>
-
-# This is a comment
-Source: bar
-Maintainer: Bar Foo <bar@example.com>
-
-"#
-        .parse()
-        .unwrap();
-        let result = d.wrap_and_sort(
-            Some(&|a: &super::Paragraph, b: &super::Paragraph| {
-                a.get("Source").cmp(&b.get("Source"))
-            }),
-            Some(&|p| {
-                p.wrap_and_sort(
-                    crate::Indentation::FieldNameLength,
-                    false,
-                    None,
-                    None::<&dyn Fn(&super::Entry, &super::Entry) -> std::cmp::Ordering>,
-                    None,
-                )
-            }),
-        );
-        assert_eq!(
-            result.to_string(),
-            r#"# This is a comment
-Source: bar
-Maintainer: Bar Foo <bar@example.com>
-
-Source: foo
-Maintainer: Foo Bar <foo@example.com>
-"#,
-        );
-    }
-
-    #[test]
-    fn test_format_sort_fields() {
-        let d: super::Deb822 = r#"Source: foo
-Maintainer: Foo Bar <foo@example.com>
-Build-Depends: debhelper (>= 9), po-debconf
-Homepage: https://example.com/
-
-"#
-        .parse()
-        .unwrap();
-        let result = d.wrap_and_sort(
-            None,
-            Some(&|p: &super::Paragraph| -> super::Paragraph {
-                p.wrap_and_sort(
-                    crate::Indentation::FieldNameLength,
-                    false,
-                    None,
-                    Some(&|a: &super::Entry, b: &super::Entry| a.key().cmp(&b.key())),
-                    None,
-                )
-            }),
-        );
-        assert_eq!(
-            result.to_string(),
-            r#"Build-Depends: debhelper (>= 9), po-debconf
-Homepage: https://example.com/
-Maintainer: Foo Bar <foo@example.com>
-Source: foo
-"#
-        );
-    }
-
-    #[test]
-    fn test_para_from_iter() {
-        let p: super::Paragraph = vec![("Foo", "Bar"), ("Baz", "Qux")].into_iter().collect();
-        assert_eq!(
-            p.to_string(),
-            r#"Foo: Bar
-Baz: Qux
-"#
-        );
-
-        let p: super::Paragraph = vec![
-            ("Foo".to_string(), "Bar".to_string()),
-            ("Baz".to_string(), "Qux".to_string()),
-        ]
-        .into_iter()
-        .collect();
-
-        assert_eq!(
-            p.to_string(),
-            r#"Foo: Bar
-Baz: Qux
-"#
-        );
-    }
-
-    #[test]
-    fn test_deb822_from_iter() {
-        let d: super::Deb822 = vec![
-            vec![("Foo", "Bar"), ("Baz", "Qux")].into_iter().collect(),
-            vec![("A", "B"), ("C", "D")].into_iter().collect(),
-        ]
-        .into_iter()
-        .collect();
-        assert_eq!(
-            d.to_string(),
-            r#"Foo: Bar
-Baz: Qux
-
-A: B
-C: D
-"#
-        );
-    }
-
-    #[test]
-    fn test_format_parse_error() {
-        assert_eq!(ParseError(vec!["foo".to_string()]).to_string(), "foo\n");
-    }
-
-    #[test]
-    fn test_format_error() {
-        assert_eq!(
-            super::Error::ParseError(ParseError(vec!["foo".to_string()])).to_string(),
-            "foo\n"
-        );
-    }
-
-    #[test]
-    fn test_get_all() {
-        let d: super::Deb822 = r#"Source: foo
-Maintainer: Foo Bar <foo@example.com>
-Maintainer: Bar Foo <bar@example.com>"#
-            .parse()
-            .unwrap();
-        let p = d.paragraphs().next().unwrap();
-        assert_eq!(
-            p.get_all("Maintainer").collect::<Vec<_>>(),
-            vec!["Foo Bar <foo@example.com>", "Bar Foo <bar@example.com>"]
+            "https://dplyr.tidyverse.org, https://github.com/tidyverse/dplyr",
+            desc.url().unwrap().as_str()
         );
     }
 }
