@@ -2,7 +2,7 @@
 name = "r-description"
 description = "Rust library for parsing and generating R DESCRIPTION files"
 edition = "2021"
-version = "0.1.2"
+version = "0.2.0"
 repository = "https://github.com/jelmer/r-description-rs"
 homepage = "https://github.com/jelmer/r-description-rs"
 license = "Apache-2.0"
