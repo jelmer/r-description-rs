@@ -103,7 +103,7 @@ dependencies = [
 
 [[package]]
 name = "r-description"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "deb822-lossless",
  "rowan",
