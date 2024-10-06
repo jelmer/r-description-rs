@@ -1,6 +1,6 @@
 [package]
 name = "r-description"
-description = "Rust library for parsing and generating R DESCRIPTION files"
+description = "Parsing and editor for R DESCRIPTION files"
 edition = "2021"
 version = "0.2.0"
 repository = "https://github.com/jelmer/r-description-rs"
