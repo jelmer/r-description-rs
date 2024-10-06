@@ -24,11 +24,15 @@ pub mod lossless;
 /// Authors@R: person("First", "Last", email = "email@example.com", role = c("aut", "cre"))
 /// Description: A longer description of the package.
 /// License: MIT + file LICENSE
+/// Depends: R (>= 3.3.0)
 /// URL: https://example.com
 /// "#).unwrap();
 /// assert_eq!(desc.name, "foo");
 /// assert_eq!(desc.title, "A Foo Package");
 /// assert_eq!(desc.version, "0.1.0".parse().unwrap());
+/// let depends = desc.depends.as_ref().unwrap();
+/// assert_eq!(depends.len(), 1);
+/// assert_eq!(depends[0].name, "R");
 /// ```
 pub mod lossy;
 
