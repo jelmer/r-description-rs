@@ -142,7 +142,7 @@ impl Relation {
     /// # Example
     /// ```
     /// use r_description::lossy::Relation;
-    /// use r_description::version::Version;
+    /// use r_description::Version;
     /// let entry: Relation = "cli (>= 2.0)".parse().unwrap();
     /// assert!(entry.satisfied_by(|name: &str| -> Option<Version> {
     ///    match name {

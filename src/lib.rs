@@ -36,13 +36,19 @@ pub mod lossless;
 /// ```
 pub mod lossy;
 
-pub mod relations;
+mod relations;
+pub use relations::{VersionConstraint, VersionLookup};
 
 pub use lossy::RDescription;
 
-pub mod version;
+mod version;
+pub use version::Version;
 
 #[derive(Debug, PartialEq, Eq)]
+/// A block of R code
+///
+/// This is a simple wrapper around a string that represents a block of R code, as used in e.g. the
+/// Authors@R field.
 pub struct RCode(String);
 
 impl std::str::FromStr for RCode {

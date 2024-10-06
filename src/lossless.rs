@@ -255,11 +255,11 @@ pub mod relations {
     //! # Example
     //! ```
     //! use r_description::lossless::{Relations, Relation};
-    //! use r_description::relations::VersionConstraint;
+    //! use r_description::VersionConstraint;
     //!
     //! let mut relations: Relations = r"cli (>= 0.19.0), R".parse().unwrap();
     //! assert_eq!(relations.to_string(), "cli (>= 0.19.0), R");
-    //! assert!(relations.satisfied_by(|name: &str| -> Option<r_description::version::Version> {
+    //! assert!(relations.satisfied_by(|name: &str| -> Option<r_description::Version> {
     //!    match name {
     //!    "cli" => Some("0.19.0".parse().unwrap()),
     //!    "R" => Some("2.25.1".parse().unwrap()),
@@ -771,7 +771,7 @@ pub mod relations {
         /// # Example
         /// ```
         /// use r_description::lossless::{Relation};
-        /// use r_description::relations::VersionConstraint;
+        /// use r_description::VersionConstraint;
         /// let relation = Relation::new("vign", Some((VersionConstraint::GreaterThanEqual, "2.0".parse().unwrap())));
         /// assert_eq!(relation.to_string(), "vign (>= 2.0)");
         /// ```
@@ -865,7 +865,7 @@ pub mod relations {
         /// # Example
         /// ```
         /// use r_description::lossless::{Relation};
-        /// use r_description::relations::VersionConstraint;
+        /// use r_description::VersionConstraint;
         /// let mut relation = Relation::new("vign", Some((VersionConstraint::GreaterThanEqual, "2.0".parse().unwrap())));
         /// relation.drop_constraint();
         /// assert_eq!(relation.to_string(), "vign");
@@ -932,7 +932,7 @@ pub mod relations {
         /// # Example
         /// ```
         /// use r_description::lossless::{Relation};
-        /// use r_description::relations::VersionConstraint;
+        /// use r_description::VersionConstraint;
         /// let mut relation = Relation::simple("vign");
         /// relation.set_version(Some((VersionConstraint::GreaterThanEqual, "2.0".parse().unwrap())));
         /// assert_eq!(relation.to_string(), "vign (>= 2.0)");

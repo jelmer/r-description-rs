@@ -52,7 +52,7 @@ impl std::fmt::Display for VersionConstraint {
 #[allow(non_camel_case_types)]
 #[repr(u16)]
 #[allow(missing_docs)]
-pub enum SyntaxKind {
+pub(crate) enum SyntaxKind {
     IDENT = 0,  // package name
     COMMA,      // ,
     L_PARENS,   // (
@@ -79,7 +79,7 @@ impl From<SyntaxKind> for rowan::SyntaxKind {
 }
 
 /// A lexer for relations strings.
-pub struct Lexer<'a> {
+pub(crate) struct Lexer<'a> {
     input: Peekable<Chars<'a>>,
 }
 
