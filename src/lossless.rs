@@ -746,6 +746,41 @@ pub mod relations {
         }
     }
 
+    impl From<Relation> for crate::lossy::Relation {
+        fn from(relation: Relation) -> Self {
+            let mut rel = crate::lossy::Relation::new();
+            rel.name = relation.name();
+            rel.version = relation.version().map(|(vc, v)| (vc, v));
+            rel
+        }
+    }
+
+    impl From<Relations> for crate::lossy::Relations {
+        fn from(relations: Relations) -> Self {
+            let mut rels = crate::lossy::Relations::new();
+            for relation in relations.relations() {
+                rels.0.push(relation.into());
+            }
+            rels
+        }
+    }
+
+    impl From<crate::lossy::Relations> for Relations {
+        fn from(relations: crate::lossy::Relations) -> Self {
+            let mut entries = vec![];
+            for relation in relations.iter() {
+                entries.push(relation.clone().into());
+            }
+            Self::from(entries)
+        }
+    }
+
+    impl From<crate::lossy::Relation> for Relation {
+        fn from(relation: crate::lossy::Relation) -> Self {
+            Relation::new(&relation.name, relation.version)
+        }
+    }
+
     fn inject(builder: &mut GreenNodeBuilder, node: SyntaxNode) {
         builder.start_node(node.kind().into());
         for child in node.children_with_tokens() {
