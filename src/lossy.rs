@@ -119,6 +119,27 @@ pub struct Relation {
     pub version: Option<(VersionConstraint, Version)>,
 }
 
+#[cfg(feature = "serde")]
+impl serde::ser::Serialize for Relation {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::ser::Serializer,
+    {
+        format!("{}", self).serialize(serializer)
+    }
+}
+
+#[cfg(feature = "serde")]
+impl serde::de::Deserialize<'_> for Relation {
+    fn deserialize<D>(deserializer: D) -> Result<Relation, D::Error>
+    where
+        D: serde::de::Deserializer<'_>,
+    {
+        let s = String::deserialize(deserializer)?;
+        s.parse().map_err(serde::de::Error::custom)
+    }
+}
+
 impl Default for Relation {
     fn default() -> Self {
         Self::new()
