@@ -108,6 +108,10 @@ pub struct RDescription {
     /// This should be a comma-separated list of IETF language
     /// tags as defined by RFC5646
     pub language: Option<String>,
+
+    #[deb822(field = "Repository")]
+    /// The R Repository to use for this package. E.g. "CRAN" or "Bioconductor"
+    pub repository: Option<String>,
 }
 
 /// A relation entry in a relationship field.
