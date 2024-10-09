@@ -1,7 +1,15 @@
+//! A library for parsing and manipulating R DESCRIPTION files.
+//!
+//! This module allows losslessly parsing R DESCRIPTION files into a structured representation.
+//! This allows modification of individual fields while preserving the
+//! original formatting of the file.
+//!
+//! This parser also allows for syntax errors in the input, and will attempt to parse as much as
+//! possible.
+//!
+//! See https://r-pkgs.org/description.html for more information.
+
 use crate::RCode;
-/// A library for parsing and manipulating R DESCRIPTION files.
-///
-/// See https://r-pkgs.org/description.html for more information.
 use deb822_lossless::Paragraph;
 pub use relations::{Relation, Relations};
 
@@ -246,6 +254,18 @@ impl RDescription {
 
     pub fn set_date(&mut self, date: &str) {
         self.0.insert("Date", date);
+    }
+
+    /// The R Repository to use for this package.
+    ///
+    /// E.g. "CRAN" or "Bioconductor"
+    pub fn repository(&self) -> Option<String> {
+        self.0.get("Repository")
+    }
+
+    /// Set the R Repository to use for this package.
+    pub fn set_repository(&mut self, repository: &str) {
+        self.0.insert("Repository", repository);
     }
 }
 
