@@ -63,7 +63,8 @@ fn serialize_url_list(urls: &[UrlEntry]) -> String {
 }
 
 fn deserialize_url_list(s: &str) -> Result<Vec<UrlEntry>, String> {
-    s.split(',')
+    s.split([',', '\n'].as_ref())
+        .filter(|s| !s.trim().is_empty())
         .map(|s| s.trim().parse())
         .collect::<Result<Vec<_>, String>>()
         .map_err(|e| e.to_string())
@@ -655,5 +656,29 @@ License: `use_mit_license()`, `use_gpl3_license()` or friends to pick a
         let parsed: UrlEntry = input.parse().unwrap();
         assert_eq!(parsed.url.as_str(), "https://example.com/");
         assert_eq!(parsed.label, Some("Example".to_string()));
+    }
+
+    #[test]
+    fn test_deserialize_url_list() {
+        let input = "https://example.com/, https://example.org (Example)";
+        let parsed = deserialize_url_list(input).unwrap();
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(parsed[0].url.as_str(), "https://example.com/");
+        assert_eq!(parsed[0].label, None);
+        assert_eq!(parsed[1].url.as_str(), "https://example.org/");
+        assert_eq!(parsed[1].label, Some("Example".to_string()));
+    }
+
+    #[test]
+    fn test_deserialize_url_list2() {
+        let input = "https://example.com/\n https://example.org (Example)\n https://example.net";
+        let parsed = deserialize_url_list(input).unwrap();
+        assert_eq!(parsed.len(), 3);
+        assert_eq!(parsed[0].url.as_str(), "https://example.com/");
+        assert_eq!(parsed[0].label, None);
+        assert_eq!(parsed[1].url.as_str(), "https://example.org/");
+        assert_eq!(parsed[1].label, Some("Example".to_string()));
+        assert_eq!(parsed[2].url.as_str(), "https://example.net/");
+        assert_eq!(parsed[2].label, None);
     }
 }
