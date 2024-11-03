@@ -643,4 +643,17 @@ License: `use_mit_license()`, `use_gpl3_license()` or friends to pick a
             }
         }));
     }
+
+    #[test]
+    fn test_parse_url_entry() {
+        let input = "https://example.com/";
+        let parsed: UrlEntry = input.parse().unwrap();
+        assert_eq!(parsed.url.as_str(), input);
+        assert_eq!(parsed.label, None);
+
+        let input = "https://example.com (Example)";
+        let parsed: UrlEntry = input.parse().unwrap();
+        assert_eq!(parsed.url.as_str(), "https://example.com/");
+        assert_eq!(parsed.label, Some("Example".to_string()));
+    }
 }
