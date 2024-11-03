@@ -15,34 +15,38 @@ as relations between versions.
 
 ```rust
 
-use r_description::RDescription;
+use std::str::FromStr;
+use r_description::lossy::RDescription;
 
-let desc = r_description::parse(r###"Package: foo
+let mut desc = RDescription::from_str(r###"Package: foo
 Version: 1.0
-# Inline comment that will be preserved.
 Depends: R (>= 3.0.0)
+Description: A foo package
+Title: A foo package
+License: GPL-3
 "###).unwrap();
 
-assert_eq!(desc.get("Package"), Some("foo"));
-assert_eq!(desc.get("Version"), Some("1.0"));
-assert_eq!(desc.get("Depends"), Some("R (>= 3.0.0"));
+assert_eq!(desc.name, "foo");
+assert_eq!(desc.version, "1.0".parse().unwrap());
+assert_eq!(desc.depends, Some("R (>= 3.0.0)".parse().unwrap()));
 
-desc.insert("License", "MIT");
+desc.license = "MIT".to_string();
 ```
 
 ```rust
 use r_description::Version;
 
-let v1 = Version::parse("1.2.3-alpha").unwrap();
-let v2 = Version::parse("1.2.3").unwrap();
+let v1: Version = "1.2.3-alpha".parse().unwrap();
+let v2: Version = "1.2.3".parse().unwrap();
 assert!(v1 < v2);
 
 ```
 
 ```rust
-use r_description::Relations;
+use std::str::FromStr;
+use r_description::lossy::Relations;
 
-let v1 = r_description::Version::parse("1.2.3").unwrap();
+let v1 = r_description::Version::from_str("1.2.3").unwrap();
 let rels: Relations = "cli (>= 2.0), crayon (= 1.3.4), testthat".parse().unwrap();
 assert_eq!(3, rels.len());
 assert_eq!(rels[0].name, "cli");
