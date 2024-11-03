@@ -15,21 +15,57 @@ use crate::relations::SyntaxKind::*;
 use crate::relations::{lex, SyntaxKind, VersionConstraint};
 use crate::version::Version;
 
-fn serialize_url_list(urls: &[url::Url]) -> String {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UrlEntry {
+    pub url: url::Url,
+    pub label: Option<String>,
+}
+
+impl std::fmt::Display for UrlEntry {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{}", self.url.as_str())?;
+        if let Some(label) = &self.label {
+            write!(f, " ({})", label)?;
+        }
+        Ok(())
+    }
+}
+
+impl std::str::FromStr for UrlEntry {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if let Some(pos) = s.find('(') {
+            let url = s[..pos].trim();
+            let label = s[pos + 1..s.len() - 1].trim();
+            Ok(UrlEntry {
+                url: url::Url::parse(url).map_err(|e| e.to_string())?,
+                label: Some(label.to_string()),
+            })
+        } else {
+            Ok(UrlEntry {
+                url: url::Url::parse(s).map_err(|e| e.to_string())?,
+                label: None,
+            })
+        }
+    }
+}
+
+fn serialize_url_list(urls: &[UrlEntry]) -> String {
     let mut s = String::new();
     for (i, url) in urls.iter().enumerate() {
         if i > 0 {
             s.push_str(", ");
         }
-        s.push_str(url.as_str());
+        s.push_str(url.to_string().as_str());
     }
     s
 }
 
-fn deserialize_url_list(s: &str) -> Result<Vec<url::Url>, String> {
+fn deserialize_url_list(s: &str) -> Result<Vec<UrlEntry>, String> {
     s.split(',')
-        .map(|s| url::Url::parse(s.trim()))
-        .collect::<Result<Vec<_>, url::ParseError>>()
+        .map(|s| s.trim().parse())
+        .collect::<Result<Vec<_>, String>>()
         .map_err(|e| e.to_string())
 }
 
@@ -69,7 +105,7 @@ pub struct RDescription {
 
     #[deb822(field = "URL", serialize_with = serialize_url_list, deserialize_with = deserialize_url_list)]
     // TODO: parse this as a list of URLs, separated by commas
-    pub url: Option<Vec<url::Url>>,
+    pub url: Option<Vec<UrlEntry>>,
 
     #[deb822(field = "BugReports")]
     pub bug_reports: Option<String>,
