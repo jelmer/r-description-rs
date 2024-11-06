@@ -13,6 +13,7 @@ use crate::RCode;
 use deb822_lossless::Paragraph;
 pub use relations::{Relation, Relations};
 
+/// R DESCRIPTION file
 pub struct RDescription(Paragraph);
 
 impl std::fmt::Display for RDescription {
@@ -28,8 +29,12 @@ impl Default for RDescription {
 }
 
 #[derive(Debug)]
+/// Error type for parsing DESCRIPTION files
 pub enum Error {
+    /// I/O error
     Io(std::io::Error),
+
+    /// Parse error
     Parse(deb822_lossless::ParseError),
 }
 
@@ -65,13 +70,17 @@ impl std::str::FromStr for RDescription {
 }
 
 impl RDescription {
+    /// Create a new empty R DESCRIPTION file
     pub fn new() -> Self {
         Self(Paragraph::new())
     }
 
+    /// Return the package name
     pub fn package(&self) -> Option<String> {
         self.0.get("Package")
     }
+
+    /// Set the package name
     pub fn set_package(&mut self, package: &str) {
         self.0.insert("Package", package);
     }
@@ -84,174 +93,212 @@ impl RDescription {
         self.0.get("Title")
     }
 
+    /// Return the maintainer of the package
     pub fn maintainer(&self) -> Option<String> {
         self.0.get("Maintainer")
     }
 
+    /// Set the maintainer of the package
     pub fn set_maintainer(&mut self, maintainer: &str) {
         self.0.insert("Maintainer", maintainer);
     }
 
+    /// Return the authors of the package
     pub fn authors(&self) -> Option<RCode> {
         self.0.get("Authors@R").map(|s| s.parse().unwrap())
     }
 
+    /// Set the authors of the package
     pub fn set_authors(&mut self, authors: &RCode) {
         self.0.insert("Authors@R", &authors.to_string());
     }
 
+    /// Set the title of the package
     pub fn set_title(&mut self, title: &str) {
         self.0.insert("Title", title);
     }
 
+    /// Return the description of the package
     pub fn description(&self) -> Option<String> {
         self.0.get("Description")
     }
 
+    /// Set the description of the package
     pub fn set_description(&mut self, description: &str) {
         self.0.insert("Description", description);
     }
 
+    /// Return the version of the package
     pub fn version(&self) -> Option<String> {
         self.0.get("Version")
     }
 
+    /// Set the version of the package
     pub fn set_version(&mut self, version: &str) {
         self.0.insert("Version", version);
     }
 
+    /// Return the encoding of the description file
     pub fn encoding(&self) -> Option<String> {
         self.0.get("Encoding")
     }
 
+    /// Set the encoding of the description file
     pub fn set_encoding(&mut self, encoding: &str) {
         self.0.insert("Encoding", encoding);
     }
 
+    /// Return the license of the package
     pub fn license(&self) -> Option<String> {
         self.0.get("License")
     }
 
+    /// Set the license of the package
     pub fn set_license(&mut self, license: &str) {
         self.0.insert("License", license);
     }
 
+    /// Return the roxygen note
     pub fn roxygen_note(&self) -> Option<String> {
         self.0.get("RoxygenNote")
     }
 
+    /// Set the roxygen note
     pub fn set_roxygen_note(&mut self, roxygen_note: &str) {
         self.0.insert("RoxygenNote", roxygen_note);
     }
 
+    /// Return the roxygen version
     pub fn roxygen(&self) -> Option<String> {
         self.0.get("Roxygen")
     }
 
+    /// Set the roxygen version
     pub fn set_roxygen(&mut self, roxygen: &str) {
         self.0.insert("Roxygen", roxygen);
     }
 
-    /// The URL of the package's homepage.
+    /// Return the URL field
     pub fn url(&self) -> Option<String> {
         // TODO: parse list of URLs, separated by commas
         self.0.get("URL")
     }
 
+    /// Set the URL field
     pub fn set_url(&mut self, url: &str) {
         // TODO: parse list of URLs, separated by commas
         self.0.insert("URL", url);
     }
 
+    /// Return the bug reports URL
     pub fn bug_reports(&self) -> Option<url::Url> {
         self.0
             .get("BugReports")
             .map(|s| url::Url::parse(s.as_str()).unwrap())
     }
 
+    /// Set the bug reports URL
     pub fn set_bug_reports(&mut self, bug_reports: &url::Url) {
         self.0.insert("BugReports", bug_reports.as_str());
     }
 
+    /// Return the imports field
     pub fn imports(&self) -> Option<Vec<String>> {
         self.0
             .get("Imports")
             .map(|s| s.split(',').map(|s| s.trim().to_string()).collect())
     }
 
+    /// Set the imports field
     pub fn set_imports(&mut self, imports: &[&str]) {
         self.0.insert("Imports", &imports.join(", "));
     }
 
+    /// Return the suggests field
     pub fn suggests(&self) -> Option<Relations> {
         self.0.get("Suggests").map(|s| s.parse().unwrap())
     }
 
+    /// Set the suggests field
     pub fn set_suggests(&mut self, suggests: Relations) {
         self.0.insert("Suggests", &suggests.to_string());
     }
 
+    /// Return the depends field
     pub fn depends(&self) -> Option<Relations> {
         self.0.get("Depends").map(|s| s.parse().unwrap())
     }
 
+    /// Set the depends field
     pub fn set_depends(&mut self, depends: Relations) {
         self.0.insert("Depends", &depends.to_string());
     }
 
+    /// Return the linking-to field
     pub fn linking_to(&self) -> Option<Vec<String>> {
         self.0
             .get("LinkingTo")
             .map(|s| s.split(',').map(|s| s.trim().to_string()).collect())
     }
 
+    /// Set the linking-to field
     pub fn set_linking_to(&mut self, linking_to: &[&str]) {
         self.0.insert("LinkingTo", &linking_to.join(", "));
     }
 
+    /// Return the lazy data field
     pub fn lazy_data(&self) -> Option<bool> {
         self.0.get("LazyData").map(|s| s == "true")
     }
 
+    /// Set the lazy data field
     pub fn set_lazy_data(&mut self, lazy_data: bool) {
         self.0
             .insert("LazyData", if lazy_data { "true" } else { "false" });
     }
 
+    /// Return the collate field
     pub fn collate(&self) -> Option<String> {
         self.0.get("Collate")
     }
 
+    /// Set the collate field
     pub fn set_collate(&mut self, collate: &str) {
         self.0.insert("Collate", collate);
     }
 
+    /// Return the vignette builder field
     pub fn vignette_builder(&self) -> Option<Vec<String>> {
         self.0
             .get("VignetteBuilder")
             .map(|s| s.split(',').map(|s| s.trim().to_string()).collect())
     }
 
+    /// Set the vignette builder field
     pub fn set_vignette_builder(&mut self, vignette_builder: &[&str]) {
         self.0
             .insert("VignetteBuilder", &vignette_builder.join(", "));
     }
 
+    /// Return the system requirements field
     pub fn system_requirements(&self) -> Option<Vec<String>> {
         self.0
             .get("SystemRequirements")
             .map(|s| s.split(',').map(|s| s.trim().to_string()).collect())
     }
 
+    /// Set the system requirements field
     pub fn set_system_requirements(&mut self, system_requirements: &[&str]) {
         self.0
             .insert("SystemRequirements", &system_requirements.join(", "));
     }
 
+    /// Return the date field
     pub fn date(&self) -> Option<String> {
         self.0.get("Date")
     }
 
+    /// Set the date field
     pub fn set_date(&mut self, date: &str) {
         self.0.insert("Date", date);
     }

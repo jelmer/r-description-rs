@@ -1,11 +1,11 @@
-/// A library for parsing and manipulating R DESCRIPTION files.
-///
-/// See https://r-pkgs.org/description.html and https://cran.r-project.org/doc/manuals/R-exts.html
-/// for more information
-///
-/// See the ``lossless`` module for a lossless parser that is
-/// forgiving in the face of errors and preserves formatting while editing
-/// at the expense of a more complex API.
+//! A library for parsing and manipulating R DESCRIPTION files.
+//!
+//! See https://r-pkgs.org/description.html and https://cran.r-project.org/doc/manuals/R-exts.html
+//! for more information
+//!
+//! See the ``lossless`` module for a lossless parser that is
+//! forgiving in the face of errors and preserves formatting while editing
+//! at the expense of a more complex API.
 use deb822_lossless::{FromDeb822, FromDeb822Paragraph, ToDeb822, ToDeb822Paragraph};
 
 use crate::RCode;
@@ -16,8 +16,12 @@ use crate::relations::{lex, SyntaxKind, VersionConstraint};
 use crate::version::Version;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// A URL entry in the URL field.
 pub struct UrlEntry {
+    /// URL
     pub url: url::Url,
+
+    /// Optional label for the URL.
     pub label: Option<String>,
 }
 
@@ -71,29 +75,35 @@ fn deserialize_url_list(s: &str) -> Result<Vec<UrlEntry>, String> {
 }
 
 #[derive(FromDeb822, ToDeb822, Debug, PartialEq, Eq)]
+/// A DESCRIPTION file.
 pub struct RDescription {
+    /// The name of the package.
     #[deb822(field = "Package")]
     pub name: String,
 
+    /// A short description of the package.
     #[deb822(field = "Description")]
     pub description: String,
 
     #[deb822(field = "Title")]
+    /// The title of the package.
     pub title: String,
 
     #[deb822(field = "Maintainer")]
+    /// The maintainer of the package.
     pub maintainer: Option<String>,
 
     #[deb822(field = "Author")]
     /// Who wrote the the package
     pub author: Option<String>,
 
-    // 'Authors@R' is a special field that can contain R code
-    // that is evaluated to get the authors and maintainers.
+    /// 'Authors@R' is a special field that can contain R code
+    /// that is evaluated to get the authors and maintainers.
     #[deb822(field = "Authors@R")]
     pub authors: Option<RCode>,
 
     #[deb822(field = "Version")]
+    /// The version of the package.
     pub version: Version,
 
     /// If the DESCRIPTION file is not written in pure ASCII, the encoding
@@ -102,37 +112,48 @@ pub struct RDescription {
     pub encoding: Option<String>,
 
     #[deb822(field = "License")]
+    /// The license of the package.
     pub license: String,
 
     #[deb822(field = "URL", serialize_with = serialize_url_list, deserialize_with = deserialize_url_list)]
     // TODO: parse this as a list of URLs, separated by commas
+    /// URLs related to the package.
     pub url: Option<Vec<UrlEntry>>,
 
     #[deb822(field = "BugReports")]
+    /// The URL or email address where bug reports should be sent.
     pub bug_reports: Option<String>,
 
     #[deb822(field = "Imports")]
+    /// The packages that this package depends on.
     pub imports: Option<Relations>,
 
     #[deb822(field = "Suggests")]
+    /// The packages that this package suggests.
     pub suggests: Option<Relations>,
 
     #[deb822(field = "Depends")]
+    /// The packages that this package depends on.
     pub depends: Option<Relations>,
 
     #[deb822(field = "LinkingTo")]
+    /// The packages that this package links to.
     pub linking_to: Option<Relations>,
 
     #[deb822(field = "LazyData")]
+    /// Whether the package has lazy data.
     pub lazy_data: Option<String>,
 
     #[deb822(field = "Collate")]
+    /// The order in which R scripts are loaded.
     pub collate: Option<String>,
 
     #[deb822(field = "VignetteBuilder")]
+    /// The package used to build vignettes.
     pub vignette_builder: Option<String>,
 
     #[deb822(field = "SystemRequirements")]
+    /// The system requirements for the package.
     pub system_requirements: Option<String>,
 
     #[deb822(field = "Date")]

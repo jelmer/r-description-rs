@@ -1,11 +1,13 @@
 //! R Version strings
 use std::cmp::Ordering;
 
-// Struct to represent a version with major, minor, patch, and an optional pre-release tag
 #[derive(Debug, PartialEq, Eq, std::hash::Hash, Clone)]
+/// Represents a version string like "1.2.3" or "1.2.3-alpha"
 pub struct Version {
-    components: Vec<u32>,
-    pre_release: Option<String>, // Pre-release version like "alpha", "beta", etc.
+    /// Version components like [1, 2, 3]
+    pub components: Vec<u32>,
+    /// Pre-release version like "alpha", "beta", etc.
+    pub pre_release: Option<String>, // Pre-release version like "alpha", "beta", etc.
 }
 
 impl std::fmt::Display for Version {
