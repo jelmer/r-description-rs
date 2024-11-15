@@ -1,6 +1,6 @@
 # R DESCRIPTION parser
 
-This crate provides a parser and editor for the `DESCRIPTION` files used in R
+This create provides a parser and editor for the `DESCRIPTION` files used in R
 packages.
 
 See <https://r-pkgs.org/description.html> and

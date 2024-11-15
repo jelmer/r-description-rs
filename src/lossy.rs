@@ -8,12 +8,12 @@
 //! at the expense of a more complex API.
 use deb822_lossless::{FromDeb822, FromDeb822Paragraph, ToDeb822, ToDeb822Paragraph};
 
-use crate::RCode;
+use create::RCode;
 use std::iter::Peekable;
 
-use crate::relations::SyntaxKind::*;
-use crate::relations::{lex, SyntaxKind, VersionConstraint};
-use crate::version::Version;
+use create::relations::SyntaxKind::*;
+use create::relations::{lex, SyntaxKind, VersionConstraint};
+use create::version::Version;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// A URL entry in the URL field.
@@ -212,7 +212,7 @@ impl Relation {
     ///    _ => None
     /// }}));
     /// ```
-    pub fn satisfied_by(&self, package_version: impl crate::relations::VersionLookup) -> bool {
+    pub fn satisfied_by(&self, package_version: impl create::relations::VersionLookup) -> bool {
         let actual = package_version.lookup_version(self.name.as_str());
         if let Some((vc, version)) = &self.version {
             if let Some(actual) = actual {
@@ -322,7 +322,7 @@ impl Relations {
     /// Check if the relations are satisfied by the given package versions.
     pub fn satisfied_by(
         &self,
-        package_version: impl crate::relations::VersionLookup + Copy,
+        package_version: impl create::relations::VersionLookup + Copy,
     ) -> bool {
         self.0.iter().all(|r| r.satisfied_by(package_version))
     }

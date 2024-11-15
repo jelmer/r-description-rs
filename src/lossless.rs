@@ -9,7 +9,7 @@
 //!
 //! See https://r-pkgs.org/description.html for more information.
 
-use crate::RCode;
+use create::RCode;
 use deb822_lossless::Paragraph;
 pub use relations::{Relation, Relations};
 
@@ -335,9 +335,9 @@ pub mod relations {
     //! relations.remove_relation(1);
     //! assert_eq!(relations.to_string(), "cli (>= 0.19.0)");
     //! ```
-    use crate::relations::SyntaxKind::{self, *};
-    use crate::relations::VersionConstraint;
-    use crate::version::Version;
+    use create::relations::SyntaxKind::{self, *};
+    use create::relations::VersionConstraint;
+    use create::version::Version;
     use rowan::{Direction, NodeOrToken};
 
     /// Error type for parsing relations fields
@@ -536,7 +536,7 @@ pub mod relations {
             }
         }
 
-        let mut tokens = crate::relations::lex(text);
+        let mut tokens = create::relations::lex(text);
         tokens.reverse();
         Parser {
             tokens,
@@ -775,7 +775,7 @@ pub mod relations {
         /// Check if this relations field is satisfied by the given package versions.
         pub fn satisfied_by(
             &self,
-            package_version: impl crate::relations::VersionLookup + Copy,
+            package_version: impl create::relations::VersionLookup + Copy,
         ) -> bool {
             self.relations().all(|e| e.satisfied_by(package_version))
         }
@@ -813,18 +813,18 @@ pub mod relations {
         }
     }
 
-    impl From<Relation> for crate::lossy::Relation {
+    impl From<Relation> for create::lossy::Relation {
         fn from(relation: Relation) -> Self {
-            let mut rel = crate::lossy::Relation::new();
+            let mut rel = create::lossy::Relation::new();
             rel.name = relation.name();
             rel.version = relation.version().map(|(vc, v)| (vc, v));
             rel
         }
     }
 
-    impl From<Relations> for crate::lossy::Relations {
+    impl From<Relations> for create::lossy::Relations {
         fn from(relations: Relations) -> Self {
-            let mut rels = crate::lossy::Relations::new();
+            let mut rels = create::lossy::Relations::new();
             for relation in relations.relations() {
                 rels.0.push(relation.into());
             }
@@ -832,8 +832,8 @@ pub mod relations {
         }
     }
 
-    impl From<crate::lossy::Relations> for Relations {
-        fn from(relations: crate::lossy::Relations) -> Self {
+    impl From<create::lossy::Relations> for Relations {
+        fn from(relations: create::lossy::Relations) -> Self {
             let mut entries = vec![];
             for relation in relations.iter() {
                 entries.push(relation.clone().into());
@@ -842,8 +842,8 @@ pub mod relations {
         }
     }
 
-    impl From<crate::lossy::Relation> for Relation {
-        fn from(relation: crate::lossy::Relation) -> Self {
+    impl From<create::lossy::Relation> for Relation {
+        fn from(relation: create::lossy::Relation) -> Self {
             Relation::new(&relation.name, relation.version)
         }
     }
@@ -1184,7 +1184,7 @@ pub mod relations {
         /// Check if this relation is satisfied by the given package version.
         pub fn satisfied_by(
             &self,
-            package_version: impl crate::relations::VersionLookup + Copy,
+            package_version: impl create::relations::VersionLookup + Copy,
         ) -> bool {
             let name = self.name();
             let version = self.version();

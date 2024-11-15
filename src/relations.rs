@@ -1,5 +1,5 @@
 //! Parsing of Debian relations strings.
-use crate::version::Version;
+use create::version::Version;
 use std::borrow::Cow;
 use std::iter::Peekable;
 use std::str::Chars;
@@ -52,7 +52,7 @@ impl std::fmt::Display for VersionConstraint {
 #[allow(non_camel_case_types)]
 #[repr(u16)]
 #[allow(missing_docs)]
-pub(crate) enum SyntaxKind {
+pub(create) enum SyntaxKind {
     IDENT = 0,  // package name
     COMMA,      // ,
     L_PARENS,   // (
@@ -79,7 +79,7 @@ impl From<SyntaxKind> for rowan::SyntaxKind {
 }
 
 /// A lexer for relations strings.
-pub(crate) struct Lexer<'a> {
+pub(create) struct Lexer<'a> {
     input: Peekable<Chars<'a>>,
 }
 
@@ -174,7 +174,7 @@ impl Iterator for Lexer<'_> {
     }
 }
 
-pub(crate) fn lex(input: &str) -> Vec<(SyntaxKind, String)> {
+pub(create) fn lex(input: &str) -> Vec<(SyntaxKind, String)> {
     let mut lexer = Lexer::new(input);
     lexer.by_ref().collect::<Vec<_>>()
 }
