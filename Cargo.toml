@@ -2,7 +2,7 @@
 name = "r-description"
 description = "Parsing and editor for R DESCRIPTION files"
 edition = "2021"
-version = "0.3.2"
+version = "0.3.3"
 repository = "https://github.com/jelmer/r-description-rs"
 homepage = "https://github.com/jelmer/r-description-rs"
 license = "Apache-2.0"
