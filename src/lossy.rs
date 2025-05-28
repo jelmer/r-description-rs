@@ -6,7 +6,8 @@
 //! See the ``lossless`` module for a lossless parser that is
 //! forgiving in the face of errors and preserves formatting while editing
 //! at the expense of a more complex API.
-use deb822_lossless::{FromDeb822, FromDeb822Paragraph, ToDeb822, ToDeb822Paragraph};
+use deb822_fast::{FromDeb822Paragraph, ToDeb822Paragraph};
+use deb822_derive::{FromDeb822, ToDeb822};
 
 use crate::RCode;
 use std::iter::Peekable;
@@ -29,7 +30,7 @@ impl std::fmt::Display for UrlEntry {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "{}", self.url.as_str())?;
         if let Some(label) = &self.label {
-            write!(f, " ({})", label)?;
+            write!(f, " ({label})")?;
         }
         Ok(())
     }
@@ -236,7 +237,7 @@ impl std::fmt::Display for Relation {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "{}", self.name)?;
         if let Some((constraint, version)) = &self.version {
-            write!(f, " ({} {})", constraint, version)?;
+            write!(f, " ({constraint} {version})")?;
         }
         Ok(())
     }
@@ -334,7 +335,7 @@ impl std::fmt::Display for Relations {
             if i > 0 {
                 f.write_str(", ")?;
             }
-            write!(f, "{}", relation)?;
+            write!(f, "{relation}")?;
         }
         Ok(())
     }
@@ -399,7 +400,7 @@ impl std::str::FromStr for Relation {
         eat_whitespace(&mut tokens);
 
         if let Some((kind, _)) = tokens.next() {
-            return Err(format!("Unexpected token: {:?}", kind));
+            return Err(format!("Unexpected token: {kind:?}"));
         }
 
         Ok(Relation { name, version })
@@ -460,7 +461,7 @@ impl std::str::FromStr for RDescription {
 
 impl std::fmt::Display for RDescription {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        let para: deb822_lossless::lossy::Paragraph = self.to_paragraph();
+        let para: deb822_lossless::Paragraph = self.to_paragraph();
         f.write_str(&para.to_string())?;
         Ok(())
     }

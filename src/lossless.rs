@@ -41,8 +41,8 @@ pub enum Error {
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
-            Self::Io(e) => write!(f, "IO error: {}", e),
-            Self::Parse(e) => write!(f, "Parse error: {}", e),
+            Self::Io(e) => write!(f, "IO error: {e}"),
+            Self::Parse(e) => write!(f, "Parse error: {e}"),
         }
     }
 }
@@ -347,7 +347,7 @@ pub mod relations {
     impl std::fmt::Display for ParseError {
         fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
             for err in &self.0 {
-                writeln!(f, "{}", err)?;
+                writeln!(f, "{err}")?;
             }
             Ok(())
         }
@@ -424,8 +424,7 @@ pub mod relations {
                     e => {
                         self.skip_ws();
                         self.error(format!(
-                            "Expected ':' or '|' or '[' or '<' or ',' but got {:?}",
-                            e
+                            "Expected ':' or '|' or '[' or '<' or ',' but got {e:?}"
                         ));
                     }
                 }
@@ -479,7 +478,7 @@ pub mod relations {
                             // Empty relation, but that's okay - probably?
                         }
                         Some(c) => {
-                            self.error(format!("expected identifier or comma but got {:?}", c));
+                            self.error(format!("expected identifier or comma but got {c:?}"));
                         }
                         None => {
                             self.error("expected identifier but got end of file".to_string());
@@ -495,7 +494,7 @@ pub mod relations {
                             break;
                         }
                         c => {
-                            self.error(format!("expected comma or end of file but got {:?}", c));
+                            self.error(format!("expected comma or end of file but got {c:?}"));
                         }
                     }
                     self.skip_ws();
@@ -551,7 +550,6 @@ pub mod relations {
     /// It is also immutable, like a GreenNode,
     /// but it contains parent pointers, offsets, and
     /// has identity semantics.
-
     type SyntaxNode = rowan::SyntaxNode<Lang>;
     #[allow(unused)]
     type SyntaxToken = rowan::SyntaxToken<Lang>;
@@ -817,7 +815,7 @@ pub mod relations {
         fn from(relation: Relation) -> Self {
             let mut rel = crate::lossy::Relation::new();
             rel.name = relation.name();
-            rel.version = relation.version().map(|(vc, v)| (vc, v));
+            rel.version = relation.version();
             rel
         }
     }
@@ -1023,7 +1021,7 @@ pub mod relations {
 
             if let (Some(constraint), Some(version)) = (constraint, version) {
                 let vc: VersionConstraint = constraint.to_string().parse().unwrap();
-                return Some((vc, (version.text().to_string()).parse().unwrap()));
+                Some((vc, (version.text().to_string()).parse().unwrap()))
             } else {
                 None
             }
@@ -1166,7 +1164,7 @@ pub mod relations {
                         n.detach();
                         break;
                     } else {
-                        panic!("Unexpected node: {:?}", n);
+                        panic!("Unexpected node: {n:?}");
                     }
                 }
 
@@ -1212,10 +1210,18 @@ pub mod relations {
 
     impl PartialOrd for Relation {
         fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+            Some(self.cmp(other))
+        }
+    }
+
+    impl Eq for Relation {}
+
+    impl Ord for Relation {
+        fn cmp(&self, other: &Self) -> std::cmp::Ordering {
             // Compare by name first, then by version
             let name_cmp = self.name().cmp(&other.name());
             if name_cmp != std::cmp::Ordering::Equal {
-                return Some(name_cmp);
+                return name_cmp;
             }
 
             let self_version = self.version();
@@ -1225,23 +1231,15 @@ pub mod relations {
                 (Some((self_vc, self_version)), Some((other_vc, other_version))) => {
                     let vc_cmp = self_vc.cmp(&other_vc);
                     if vc_cmp != std::cmp::Ordering::Equal {
-                        return Some(vc_cmp);
+                        return vc_cmp;
                     }
 
-                    Some(self_version.cmp(&other_version))
+                    self_version.cmp(&other_version)
                 }
-                (Some(_), None) => Some(std::cmp::Ordering::Greater),
-                (None, Some(_)) => Some(std::cmp::Ordering::Less),
-                (None, None) => Some(std::cmp::Ordering::Equal),
+                (Some(_), None) => std::cmp::Ordering::Greater,
+                (None, Some(_)) => std::cmp::Ordering::Less,
+                (None, None) => std::cmp::Ordering::Equal,
             }
-        }
-    }
-
-    impl Eq for Relation {}
-
-    impl Ord for Relation {
-        fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-            self.partial_cmp(other).unwrap()
         }
     }
 

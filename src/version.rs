@@ -51,14 +51,14 @@ impl std::str::FromStr for Version {
         let mut parts = s.splitn(2, '-');
         let version = parts
             .next()
-            .ok_or(format!("Invalid version string: {}", s))?;
+            .ok_or(format!("Invalid version string: {s}"))?;
         let pre_release = parts.next().map(|s| s.to_string());
 
         let components = version
             .split('.')
             .map(|part| {
                 part.parse()
-                    .map_err(|_| format!("Invalid version component: {}", s))
+                    .map_err(|_| format!("Invalid version component: {s}"))
             })
             .collect::<Result<Vec<_>, _>>()?;
 
