@@ -30,7 +30,7 @@ impl std::fmt::Display for UrlEntry {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "{}", self.url.as_str())?;
         if let Some(label) = &self.label {
-            write!(f, " ({})", label)?;
+            write!(f, " ({label})")?;
         }
         Ok(())
     }
@@ -237,7 +237,7 @@ impl std::fmt::Display for Relation {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "{}", self.name)?;
         if let Some((constraint, version)) = &self.version {
-            write!(f, " ({} {})", constraint, version)?;
+            write!(f, " ({constraint} {version})")?;
         }
         Ok(())
     }
@@ -335,7 +335,7 @@ impl std::fmt::Display for Relations {
             if i > 0 {
                 f.write_str(", ")?;
             }
-            write!(f, "{}", relation)?;
+            write!(f, "{relation}")?;
         }
         Ok(())
     }
@@ -400,7 +400,7 @@ impl std::str::FromStr for Relation {
         eat_whitespace(&mut tokens);
 
         if let Some((kind, _)) = tokens.next() {
-            return Err(format!("Unexpected token: {:?}", kind));
+            return Err(format!("Unexpected token: {kind:?}"));
         }
 
         Ok(Relation { name, version })

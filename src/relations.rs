@@ -29,7 +29,7 @@ impl std::str::FromStr for VersionConstraint {
             "=" => Ok(VersionConstraint::Equal),
             ">>" => Ok(VersionConstraint::GreaterThan),
             "<<" => Ok(VersionConstraint::LessThan),
-            _ => Err(format!("Invalid version constraint: {}", s)),
+            _ => Err(format!("Invalid version constraint: {s}")),
         }
     }
 }
@@ -49,7 +49,7 @@ impl std::fmt::Display for VersionConstraint {
 /// Let's start with defining all kinds of tokens and
 /// composite nodes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[allow(non_camel_case_types)]
+#[allow(non_camel_case_types, clippy::upper_case_acronyms)]
 #[repr(u16)]
 #[allow(missing_docs)]
 pub(crate) enum SyntaxKind {
