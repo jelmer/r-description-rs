@@ -6,7 +6,8 @@
 //! See the ``lossless`` module for a lossless parser that is
 //! forgiving in the face of errors and preserves formatting while editing
 //! at the expense of a more complex API.
-use deb822_lossless::{FromDeb822, FromDeb822Paragraph, ToDeb822, ToDeb822Paragraph};
+use deb822_fast::{FromDeb822Paragraph, ToDeb822Paragraph};
+use deb822_derive::{FromDeb822, ToDeb822};
 
 use crate::RCode;
 use std::iter::Peekable;
@@ -460,7 +461,7 @@ impl std::str::FromStr for RDescription {
 
 impl std::fmt::Display for RDescription {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        let para: deb822_lossless::lossy::Paragraph = self.to_paragraph();
+        let para: deb822_lossless::Paragraph = self.to_paragraph();
         f.write_str(&para.to_string())?;
         Ok(())
     }
