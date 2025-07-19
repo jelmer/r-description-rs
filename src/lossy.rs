@@ -6,8 +6,8 @@
 //! See the ``lossless`` module for a lossless parser that is
 //! forgiving in the face of errors and preserves formatting while editing
 //! at the expense of a more complex API.
-use deb822_fast::{FromDeb822Paragraph, ToDeb822Paragraph};
 use deb822_derive::{FromDeb822, ToDeb822};
+use deb822_fast::{FromDeb822Paragraph, ToDeb822Paragraph};
 
 use crate::RCode;
 use std::iter::Peekable;
@@ -452,16 +452,14 @@ impl std::str::FromStr for RDescription {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let para: deb822_lossless::Paragraph = s
-            .parse()
-            .map_err(|e: deb822_lossless::ParseError| e.to_string())?;
+        let para = deb822_fast::Paragraph::from_str(s).map_err(|e| e.to_string())?;
         Self::from_paragraph(&para)
     }
 }
 
 impl std::fmt::Display for RDescription {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        let para: deb822_lossless::Paragraph = self.to_paragraph();
+        let para: deb822_fast::Paragraph = self.to_paragraph();
         f.write_str(&para.to_string())?;
         Ok(())
     }
@@ -497,7 +495,8 @@ RoxygenNote: 7.3.2
         assert_eq!(
             desc.authors,
             Some(RCode(
-                r#"person("First", "Last", , "first.last@example.com", role = c("aut", "cre"),
+                r#"
+person("First", "Last", , "first.last@example.com", role = c("aut", "cre"),
 comment = c(ORCID = "YOUR-ORCID-ID"))"#
                     .to_string()
             ))
@@ -517,7 +516,8 @@ comment = c(ORCID = "YOUR-ORCID-ID"))"#
             r###"Package: mypackage
 Description: What the package does (one paragraph).
 Title: What the Package Does (One Line, Title Case)
-Authors@R: person("First", "Last", , "first.last@example.com", role = c("aut", "cre"),
+Authors@R: 
+ person("First", "Last", , "first.last@example.com", role = c("aut", "cre"),
  comment = c(ORCID = "YOUR-ORCID-ID"))
 Version: 0.0.0.9000
 Encoding: UTF-8
