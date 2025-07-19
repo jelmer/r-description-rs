@@ -49,9 +49,7 @@ impl std::str::FromStr for Version {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         // Split the version string by '.' and '-' to get major, minor, patch, and pre-release
         let mut parts = s.splitn(2, '-');
-        let version = parts
-            .next()
-            .ok_or(format!("Invalid version string: {s}"))?;
+        let version = parts.next().ok_or(format!("Invalid version string: {s}"))?;
         let pre_release = parts.next().map(|s| s.to_string());
 
         let components = version
