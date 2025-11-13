@@ -2,7 +2,7 @@
 name = "r-description"
 description = "Parsing and editor for R DESCRIPTION files"
 edition = "2021"
-version = "0.3.4"
+version = "0.3.6"
 repository = "https://github.com/jelmer/r-description-rs"
 homepage = "https://github.com/jelmer/r-description-rs"
 license = "Apache-2.0"
@@ -14,7 +14,7 @@ deb822-lossless = { version = ">=0.3,<0.5" }
 deb822-fast = { version = "0.2.0", features = ["derive"] }
 deb822-derive = "0.3.0"
 
-rowan = ">=0.15.16"
+rowan = "0.16"
 url = "2"
 serde = { version = "1", optional = true }
 
