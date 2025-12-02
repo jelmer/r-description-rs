@@ -30,9 +30,9 @@ dependencies = [
 
 [[package]]
 name = "deb822-fast"
-version = "0.2.1"
+version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8920777d23081265f95ece4b4e74a11de23103f6ab1dc6e1b4c1691900dc56d4"
+checksum = "f410ccb5cbd9b81d56b290131bad4350ecf8b46416fb901e759dc1e6916a8198"
 dependencies = [
  "deb822-derive",
 ]
