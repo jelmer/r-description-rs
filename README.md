@@ -36,9 +36,15 @@ desc.license = "MIT".to_string();
 ```rust
 use r_description::Version;
 
-let v1: Version = "1.2.3-alpha".parse().unwrap();
+// '-' and '.' are equivalent separators in R version strings
+let v1: Version = "2.5-1".parse().unwrap();
+let v2: Version = "2.5.1".parse().unwrap();
+assert_eq!(v1, v2);
+
+// Version strings can have more than three components
+let v1: Version = "1.2.3.9000".parse().unwrap();
 let v2: Version = "1.2.3".parse().unwrap();
-assert!(v1 < v2);
+assert!(v1 > v2);
 
 ```
 
