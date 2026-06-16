@@ -39,9 +39,9 @@ dependencies = [
 
 [[package]]
 name = "deb822-lossless"
-version = "0.5.17"
+version = "0.5.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c53935151def6ca46a0c6460b7b71f0fd74ecc1feffa594dea04eef98e5a6eba"
+checksum = "31505d7661ac33d7848f1fb6ba82bd269b853d01fb44a1bfd9451ffad10c0005"
 dependencies = [
  "regex",
  "rowan",
