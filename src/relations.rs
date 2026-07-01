@@ -27,8 +27,8 @@ impl std::str::FromStr for VersionConstraint {
             ">=" => Ok(VersionConstraint::GreaterThanEqual),
             "<=" => Ok(VersionConstraint::LessThanEqual),
             "=" => Ok(VersionConstraint::Equal),
-            ">>" => Ok(VersionConstraint::GreaterThan),
-            "<<" => Ok(VersionConstraint::LessThan),
+            ">" | ">>" => Ok(VersionConstraint::GreaterThan),
+            "<" | "<<" => Ok(VersionConstraint::LessThan),
             _ => Err(format!("Invalid version constraint: {s}")),
         }
     }
