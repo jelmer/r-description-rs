@@ -6,10 +6,8 @@ use std::str::Chars;
 
 /// Constraint on a package version.
 ///
-/// The [`std::fmt::Display`] and [`std::str::FromStr`] implementations use the
-/// R operators documented in Writing R Extensions (`<`, `<=`, `==`, `>=`, `>`,
-/// `!=`). The Debian-style `<<` and `>>` are also accepted when parsing, since
-/// this crate started out reusing the Debian relations grammar.
+/// The operators are those documented in Writing R Extensions: `<`, `<=`,
+/// `==`, `!=`, `>=`, `>`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum VersionConstraint {
     /// <
@@ -33,10 +31,10 @@ impl std::str::FromStr for VersionConstraint {
         match s {
             ">=" => Ok(VersionConstraint::GreaterThanEqual),
             "<=" => Ok(VersionConstraint::LessThanEqual),
-            "=" | "==" => Ok(VersionConstraint::Equal),
+            "==" => Ok(VersionConstraint::Equal),
             "!=" => Ok(VersionConstraint::NotEqual),
-            ">" | ">>" => Ok(VersionConstraint::GreaterThan),
-            "<" | "<<" => Ok(VersionConstraint::LessThan),
+            ">" => Ok(VersionConstraint::GreaterThan),
+            "<" => Ok(VersionConstraint::LessThan),
             _ => Err(format!("Invalid version constraint: {s}")),
         }
     }
@@ -239,10 +237,10 @@ mod tests {
     }
 
     #[test]
-    fn parse_debian_and_bare_aliases() {
-        assert_eq!("<<".parse(), Ok(VersionConstraint::LessThan));
-        assert_eq!(">>".parse(), Ok(VersionConstraint::GreaterThan));
-        assert_eq!("=".parse(), Ok(VersionConstraint::Equal));
+    fn debian_operators_are_rejected() {
+        assert!("<<".parse::<VersionConstraint>().is_err());
+        assert!(">>".parse::<VersionConstraint>().is_err());
+        assert!("=".parse::<VersionConstraint>().is_err());
     }
 
     #[test]

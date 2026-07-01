@@ -650,14 +650,14 @@ License: `use_mit_license()`, `use_gpl3_license()` or friends to pick a
 
     #[test]
     fn test_relations_len() {
-        let input = "cli (>= 0.20.21), cli (<< 0.21)";
+        let input = "cli (>= 0.20.21), cli (< 0.21)";
         let parsed: Relations = input.parse().unwrap();
         assert_eq!(parsed.len(), 2);
     }
 
     #[test]
     fn test_relations_remove() {
-        let input = "cli (>= 0.20.21), cli (<< 0.21)";
+        let input = "cli (>= 0.20.21), cli (< 0.21)";
         let mut parsed: Relations = input.parse().unwrap();
         parsed.remove(1);
         assert_eq!(parsed.len(), 1);
@@ -666,7 +666,7 @@ License: `use_mit_license()`, `use_gpl3_license()` or friends to pick a
 
     #[test]
     fn test_relations_satisfied_by() {
-        let input = "cli (>= 0.20.21), cli (<< 0.21)";
+        let input = "cli (>= 0.20.21), cli (< 0.21)";
         let parsed: Relations = input.parse().unwrap();
         assert!(parsed.satisfied_by(|name: &str| -> Option<Version> {
             match name {
