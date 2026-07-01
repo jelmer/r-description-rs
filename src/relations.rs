@@ -1,22 +1,29 @@
-//! Parsing of Debian relations strings.
+//! Parsing of R DESCRIPTION relations strings.
 use crate::version::Version;
 use std::borrow::Cow;
 use std::iter::Peekable;
 use std::str::Chars;
 
-/// Constraint on a Debian package version.
+/// Constraint on a package version.
+///
+/// The [`std::fmt::Display`] and [`std::str::FromStr`] implementations use the
+/// R operators documented in Writing R Extensions (`<`, `<=`, `==`, `>=`, `>`,
+/// `!=`). The Debian-style `<<` and `>>` are also accepted when parsing, since
+/// this crate started out reusing the Debian relations grammar.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum VersionConstraint {
-    /// <<
-    LessThan, // <<
+    /// <
+    LessThan,
     /// <=
-    LessThanEqual, // <=
-    /// =
-    Equal, // =
-    /// >>
-    GreaterThan, // >>
+    LessThanEqual,
+    /// ==
+    Equal,
+    /// !=
+    NotEqual,
+    /// >
+    GreaterThan,
     /// >=
-    GreaterThanEqual, // >=
+    GreaterThanEqual,
 }
 
 impl std::str::FromStr for VersionConstraint {
@@ -26,7 +33,8 @@ impl std::str::FromStr for VersionConstraint {
         match s {
             ">=" => Ok(VersionConstraint::GreaterThanEqual),
             "<=" => Ok(VersionConstraint::LessThanEqual),
-            "=" => Ok(VersionConstraint::Equal),
+            "=" | "==" => Ok(VersionConstraint::Equal),
+            "!=" => Ok(VersionConstraint::NotEqual),
             ">" | ">>" => Ok(VersionConstraint::GreaterThan),
             "<" | "<<" => Ok(VersionConstraint::LessThan),
             _ => Err(format!("Invalid version constraint: {s}")),
@@ -39,9 +47,10 @@ impl std::fmt::Display for VersionConstraint {
         match self {
             VersionConstraint::GreaterThanEqual => f.write_str(">="),
             VersionConstraint::LessThanEqual => f.write_str("<="),
-            VersionConstraint::Equal => f.write_str("="),
-            VersionConstraint::GreaterThan => f.write_str(">>"),
-            VersionConstraint::LessThan => f.write_str("<<"),
+            VersionConstraint::Equal => f.write_str("=="),
+            VersionConstraint::NotEqual => f.write_str("!="),
+            VersionConstraint::GreaterThan => f.write_str(">"),
+            VersionConstraint::LessThan => f.write_str("<"),
         }
     }
 }
@@ -60,6 +69,7 @@ pub(crate) enum SyntaxKind {
     L_ANGLE,    // <
     R_ANGLE,    // >
     EQUAL,      // =
+    NOT,        // !
     WHITESPACE, // whitespace
     NEWLINE,    // newline
     ERROR,      // as well as errors
@@ -68,7 +78,7 @@ pub(crate) enum SyntaxKind {
     ROOT,       // The entire file
     RELATION,   // An alternative in a dependency
     VERSION,    // A version constraint
-    CONSTRAINT, // (">=", "<=", "=", ">>", "<<")
+    CONSTRAINT, // (">=", "<=", "==", "!=", ">", "<")
 }
 
 /// Convert our `SyntaxKind` into the rowan `SyntaxKind`.
@@ -142,6 +152,10 @@ impl<'a> Lexer<'a> {
                     self.input.next();
                     Some((SyntaxKind::EQUAL, "=".to_owned()))
                 }
+                '!' => {
+                    self.input.next();
+                    Some((SyntaxKind::NOT, "!".to_owned()))
+                }
                 '\n' => {
                     self.input.next();
                     Some((SyntaxKind::NEWLINE, "\n".to_owned()))
@@ -207,5 +221,42 @@ impl VersionLookup for (String, Version) {
         } else {
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::VersionConstraint;
+
+    #[test]
+    fn parse_r_operators() {
+        assert_eq!("<".parse(), Ok(VersionConstraint::LessThan));
+        assert_eq!("<=".parse(), Ok(VersionConstraint::LessThanEqual));
+        assert_eq!("==".parse(), Ok(VersionConstraint::Equal));
+        assert_eq!("!=".parse(), Ok(VersionConstraint::NotEqual));
+        assert_eq!(">".parse(), Ok(VersionConstraint::GreaterThan));
+        assert_eq!(">=".parse(), Ok(VersionConstraint::GreaterThanEqual));
+    }
+
+    #[test]
+    fn parse_debian_and_bare_aliases() {
+        assert_eq!("<<".parse(), Ok(VersionConstraint::LessThan));
+        assert_eq!(">>".parse(), Ok(VersionConstraint::GreaterThan));
+        assert_eq!("=".parse(), Ok(VersionConstraint::Equal));
+    }
+
+    #[test]
+    fn display_uses_r_operators() {
+        assert_eq!(VersionConstraint::LessThan.to_string(), "<");
+        assert_eq!(VersionConstraint::LessThanEqual.to_string(), "<=");
+        assert_eq!(VersionConstraint::Equal.to_string(), "==");
+        assert_eq!(VersionConstraint::NotEqual.to_string(), "!=");
+        assert_eq!(VersionConstraint::GreaterThan.to_string(), ">");
+        assert_eq!(VersionConstraint::GreaterThanEqual.to_string(), ">=");
+    }
+
+    #[test]
+    fn invalid_operator() {
+        assert!("~=".parse::<VersionConstraint>().is_err());
     }
 }

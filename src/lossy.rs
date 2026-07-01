@@ -221,6 +221,7 @@ impl Relation {
                     VersionConstraint::GreaterThanEqual => actual.as_ref() >= version,
                     VersionConstraint::LessThanEqual => actual.as_ref() <= version,
                     VersionConstraint::Equal => actual.as_ref() == version,
+                    VersionConstraint::NotEqual => actual.as_ref() != version,
                     VersionConstraint::GreaterThan => actual.as_ref() > version,
                     VersionConstraint::LessThan => actual.as_ref() < version,
                 }
@@ -372,7 +373,7 @@ impl std::str::FromStr for Relation {
             let mut constraint = String::new();
             while let Some((kind, t)) = tokens.peek() {
                 match kind {
-                    EQUAL | L_ANGLE | R_ANGLE => {
+                    EQUAL | L_ANGLE | R_ANGLE | NOT => {
                         constraint.push_str(t);
                         tokens.next();
                     }
@@ -574,11 +575,27 @@ License: `use_mit_license()`, `use_gpl3_license()` or friends to pick a
             parsed[0].version,
             Some((VersionConstraint::LessThan, "2.0.0".parse().unwrap()))
         );
+
+        let parsed: Relations = "xml2 (== 2.0.0)".parse().unwrap();
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(
+            parsed[0].version,
+            Some((VersionConstraint::Equal, "2.0.0".parse().unwrap()))
+        );
+        assert_eq!(parsed.to_string(), "xml2 (== 2.0.0)");
+
+        let parsed: Relations = "xml2 (!= 2.0.0)".parse().unwrap();
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(
+            parsed[0].version,
+            Some((VersionConstraint::NotEqual, "2.0.0".parse().unwrap()))
+        );
+        assert_eq!(parsed.to_string(), "xml2 (!= 2.0.0)");
     }
 
     #[test]
     fn test_multiple() {
-        let input = "cli (>= 0.20.21), cli (<< 0.21)";
+        let input = "cli (>= 0.20.21), cli (< 0.21)";
         let parsed: Relations = input.parse().unwrap();
         assert_eq!(parsed.to_string(), input);
         assert_eq!(parsed.len(), 2);
@@ -592,7 +609,7 @@ License: `use_mit_license()`, `use_gpl3_license()` or friends to pick a
             ))
         );
         let relation = &parsed[1];
-        assert_eq!(relation.to_string(), "cli (<< 0.21)");
+        assert_eq!(relation.to_string(), "cli (< 0.21)");
         assert_eq!(
             relation.version,
             Some((VersionConstraint::LessThan, "0.21".parse().unwrap()))
@@ -602,10 +619,10 @@ License: `use_mit_license()`, `use_gpl3_license()` or friends to pick a
     #[cfg(feature = "serde")]
     #[test]
     fn test_serde_relations() {
-        let input = "cli (>= 0.20.21), cli (<< 0.21)";
+        let input = "cli (>= 0.20.21), cli (< 0.21)";
         let parsed: Relations = input.parse().unwrap();
         let serialized = serde_json::to_string(&parsed).unwrap();
-        assert_eq!(serialized, r#""cli (>= 0.20.21), cli (<< 0.21)""#);
+        assert_eq!(serialized, r#""cli (>= 0.20.21), cli (< 0.21)""#);
         let deserialized: Relations = serde_json::from_str(&serialized).unwrap();
         assert_eq!(deserialized, parsed);
     }

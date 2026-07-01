@@ -379,6 +379,22 @@ pub mod relations {
     /// of currently in-progress nodes
     use rowan::GreenNodeBuilder;
 
+    /// Emit one token per character of a version constraint into an in-progress
+    /// CONSTRAINT node, matching what the lexer would have produced for the same
+    /// operator.
+    fn push_constraint_tokens(builder: &mut GreenNodeBuilder, vc: &VersionConstraint) {
+        for c in vc.to_string().chars() {
+            let kind = match c {
+                '>' => R_ANGLE,
+                '<' => L_ANGLE,
+                '=' => EQUAL,
+                '!' => NOT,
+                _ => unreachable!("unexpected constraint character {c:?}"),
+            };
+            builder.token(kind.into(), c.to_string().as_str());
+        }
+    }
+
     /// The parse results are stored as a "green tree".
     /// We'll discuss working with the results later
     struct Parse {
@@ -440,6 +456,7 @@ pub mod relations {
                     while self.current() == Some(L_ANGLE)
                         || self.current() == Some(R_ANGLE)
                         || self.current() == Some(EQUAL)
+                        || self.current() == Some(NOT)
                     {
                         self.bump();
                     }
@@ -884,17 +901,7 @@ pub mod relations {
                 builder.start_node(SyntaxKind::VERSION.into());
                 builder.token(L_PARENS.into(), "(");
                 builder.start_node(SyntaxKind::CONSTRAINT.into());
-                for c in vc.to_string().chars() {
-                    builder.token(
-                        match c {
-                            '>' => R_ANGLE.into(),
-                            '<' => L_ANGLE.into(),
-                            '=' => EQUAL.into(),
-                            _ => unreachable!(),
-                        },
-                        c.to_string().as_str(),
-                    );
-                }
+                push_constraint_tokens(&mut builder, &vc);
                 builder.finish_node();
 
                 builder.token(WHITESPACE.into(), " ");
@@ -928,16 +935,7 @@ pub mod relations {
                 builder.start_node(SyntaxKind::VERSION.into());
                 builder.token(L_PARENS.into(), "(");
                 builder.start_node(SyntaxKind::CONSTRAINT.into());
-                builder.token(
-                    match vc {
-                        VersionConstraint::GreaterThanEqual => R_ANGLE.into(),
-                        VersionConstraint::LessThanEqual => L_ANGLE.into(),
-                        VersionConstraint::Equal => EQUAL.into(),
-                        VersionConstraint::GreaterThan => R_ANGLE.into(),
-                        VersionConstraint::LessThan => L_ANGLE.into(),
-                    },
-                    vc.to_string().as_str(),
-                );
+                push_constraint_tokens(&mut builder, &vc);
                 builder.finish_node();
                 builder.token(WHITESPACE.into(), " ");
                 builder.token(IDENT.into(), version.to_string().as_str());
@@ -1044,25 +1042,7 @@ pub mod relations {
                 builder.start_node(VERSION.into());
                 builder.token(L_PARENS.into(), "(");
                 builder.start_node(CONSTRAINT.into());
-                match vc {
-                    VersionConstraint::GreaterThanEqual => {
-                        builder.token(R_ANGLE.into(), ">");
-                        builder.token(EQUAL.into(), "=");
-                    }
-                    VersionConstraint::LessThanEqual => {
-                        builder.token(L_ANGLE.into(), "<");
-                        builder.token(EQUAL.into(), "=");
-                    }
-                    VersionConstraint::Equal => {
-                        builder.token(EQUAL.into(), "=");
-                    }
-                    VersionConstraint::GreaterThan => {
-                        builder.token(R_ANGLE.into(), ">");
-                    }
-                    VersionConstraint::LessThan => {
-                        builder.token(L_ANGLE.into(), "<");
-                    }
-                }
+                push_constraint_tokens(&mut builder, &vc);
                 builder.finish_node(); // CONSTRAINT
                 builder.token(WHITESPACE.into(), " ");
                 builder.token(IDENT.into(), version.to_string().as_str());
@@ -1196,6 +1176,7 @@ pub mod relations {
                             package_version.into_owned() <= version.1
                         }
                         VersionConstraint::Equal => package_version.into_owned() == version.1,
+                        VersionConstraint::NotEqual => package_version.into_owned() != version.1,
                         VersionConstraint::GreaterThan => package_version.into_owned() > version.1,
                         VersionConstraint::LessThan => package_version.into_owned() < version.1,
                     }
@@ -1322,6 +1303,43 @@ pub mod relations {
                 relation.version(),
                 Some((VersionConstraint::LessThan, "2.0.0".parse().unwrap()))
             );
+        }
+
+        #[test]
+        fn test_r_equality_operators() {
+            let input = "xml2 (== 1.0.0)";
+            let parsed: Relations = input.parse().unwrap();
+            assert_eq!(parsed.to_string(), input);
+            let relation = parsed.relations().next().unwrap();
+            assert_eq!(
+                relation.version(),
+                Some((VersionConstraint::Equal, "1.0.0".parse().unwrap()))
+            );
+
+            let input = "xml2 (!= 1.0.0)";
+            let parsed: Relations = input.parse().unwrap();
+            assert_eq!(parsed.to_string(), input);
+            let relation = parsed.relations().next().unwrap();
+            assert_eq!(
+                relation.version(),
+                Some((VersionConstraint::NotEqual, "1.0.0".parse().unwrap()))
+            );
+        }
+
+        #[test]
+        fn test_constructed_relations_use_r_operators() {
+            let cases = [
+                (VersionConstraint::LessThan, "xml2 (< 1.0)"),
+                (VersionConstraint::LessThanEqual, "xml2 (<= 1.0)"),
+                (VersionConstraint::Equal, "xml2 (== 1.0)"),
+                (VersionConstraint::NotEqual, "xml2 (!= 1.0)"),
+                (VersionConstraint::GreaterThan, "xml2 (> 1.0)"),
+                (VersionConstraint::GreaterThanEqual, "xml2 (>= 1.0)"),
+            ];
+            for (vc, expected) in cases {
+                let relation = Relation::new("xml2", Some((vc, "1.0".parse().unwrap())));
+                assert_eq!(relation.to_string(), expected);
+            }
         }
 
         #[test]
@@ -1533,11 +1551,11 @@ pub mod relations {
 
         #[test]
         fn test_wrap_and_sort_relations() {
-            let relations: Relations = "cli (>= 0.20.21)  , \n\n\n\ncli (<< 0.21)".parse().unwrap();
+            let relations: Relations = "cli (>= 0.20.21)  , \n\n\n\ncli (< 0.21)".parse().unwrap();
 
             let wrapped = relations.wrap_and_sort();
 
-            assert_eq!(wrapped.to_string(), "cli (<< 0.21), cli (>= 0.20.21)");
+            assert_eq!(wrapped.to_string(), "cli (< 0.21), cli (>= 0.20.21)");
         }
 
         #[cfg(feature = "serde")]
