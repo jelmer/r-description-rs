@@ -1304,6 +1304,24 @@ pub mod relations {
                     "0.20.21".parse().unwrap()
                 ))
             );
+
+            let input = "xml2 (> 1.0.0)";
+            let parsed: Relations = input.parse().unwrap();
+            assert_eq!(parsed.to_string(), input);
+            let relation = parsed.relations().next().unwrap();
+            assert_eq!(
+                relation.version(),
+                Some((VersionConstraint::GreaterThan, "1.0.0".parse().unwrap()))
+            );
+
+            let input = "xml2 (< 2.0.0)";
+            let parsed: Relations = input.parse().unwrap();
+            assert_eq!(parsed.to_string(), input);
+            let relation = parsed.relations().next().unwrap();
+            assert_eq!(
+                relation.version(),
+                Some((VersionConstraint::LessThan, "2.0.0".parse().unwrap()))
+            );
         }
 
         #[test]

@@ -558,6 +558,22 @@ License: `use_mit_license()`, `use_gpl3_license()` or friends to pick a
                 "0.20.21".parse().unwrap()
             ))
         );
+
+        let parsed: Relations = "xml2 (> 1.0.0)".parse().unwrap();
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].name, "xml2");
+        assert_eq!(
+            parsed[0].version,
+            Some((VersionConstraint::GreaterThan, "1.0.0".parse().unwrap()))
+        );
+
+        let parsed: Relations = "xml2 (< 2.0.0)".parse().unwrap();
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].name, "xml2");
+        assert_eq!(
+            parsed[0].version,
+            Some((VersionConstraint::LessThan, "2.0.0".parse().unwrap()))
+        );
     }
 
     #[test]
