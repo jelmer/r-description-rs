@@ -53,7 +53,7 @@ use std::str::FromStr;
 use r_description::lossy::Relations;
 
 let v1 = r_description::Version::from_str("1.2.3").unwrap();
-let rels: Relations = "cli (>= 2.0), crayon (= 1.3.4), testthat".parse().unwrap();
+let rels: Relations = "cli (>= 2.0), crayon (== 1.3.4), testthat".parse().unwrap();
 assert_eq!(3, rels.len());
 assert_eq!(rels[0].name, "cli");
 ```
