@@ -10,21 +10,22 @@
 //! See https://r-pkgs.org/description.html for more information.
 
 use crate::RCode;
-use deb822_lossless::Paragraph;
+use deb822_lossless::{Deb822, Paragraph, Parse as Deb822Parse};
 pub use relations::{Relation, Relations, Version};
+use rowan::ast::AstNode;
 
 /// R DESCRIPTION file
-pub struct RDescription(Paragraph);
+pub struct RDescription(Deb822Parse<Deb822>);
 
 impl std::fmt::Display for RDescription {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{}", self.0)
+        write!(f, "{}", self.0.tree())
     }
 }
 
 impl Default for RDescription {
     fn default() -> Self {
-        Self(Paragraph::new())
+        Self(Deb822::parse(""))
     }
 }
 
@@ -65,24 +66,56 @@ impl std::str::FromStr for RDescription {
     type Err = Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(Self(Paragraph::from_str(s)?))
+        let parse = Deb822::parse(s);
+        parse.clone().to_result()?;
+        Ok(Self(parse))
     }
 }
 
 impl RDescription {
+    fn deb822(&self) -> Deb822 {
+        self.0.tree()
+    }
+
+    fn first_paragraph(&self) -> Option<Paragraph> {
+        self.deb822().paragraphs().next()
+    }
+
+    fn get(&self, key: &str) -> Option<String> {
+        self.first_paragraph()
+            .and_then(|paragraph| paragraph.get(key))
+    }
+
+    fn set_field(&mut self, key: &str, value: &str) {
+        let deb822 = self.deb822();
+        let (mut paragraph, had_paragraph) = if let Some(paragraph) = deb822.paragraphs().next() {
+            (paragraph, true)
+        } else {
+            (Paragraph::new(), false)
+        };
+        paragraph.set(key, value);
+        let green = if had_paragraph {
+            deb822.syntax().green().into_owned()
+        } else {
+            let deb822 = vec![paragraph].into_iter().collect::<Deb822>();
+            deb822.syntax().green().into_owned()
+        };
+        self.0 = Deb822Parse::new(green, Vec::new());
+    }
+
     /// Create a new empty R DESCRIPTION file
     pub fn new() -> Self {
-        Self(Paragraph::new())
+        Self(Deb822::parse(""))
     }
 
     /// Return the package name
     pub fn package(&self) -> Option<String> {
-        self.0.get("Package")
+        self.get("Package")
     }
 
     /// Set the package name
     pub fn set_package(&mut self, package: &str) {
-        self.0.insert("Package", package);
+        self.set_field("Package", package);
     }
 
     /// One line description of the package, and is often shown in a package listing
@@ -90,235 +123,229 @@ impl RDescription {
     /// It should be plain text (no markup), capitalised like a title, and NOT end in a period.
     /// Keep it short: listings will often truncate the title to 65 characters.
     pub fn title(&self) -> Option<String> {
-        self.0.get("Title")
+        self.get("Title")
     }
 
     /// Return the maintainer of the package
     pub fn maintainer(&self) -> Option<String> {
-        self.0.get("Maintainer")
+        self.get("Maintainer")
     }
 
     /// Set the maintainer of the package
     pub fn set_maintainer(&mut self, maintainer: &str) {
-        self.0.insert("Maintainer", maintainer);
+        self.set_field("Maintainer", maintainer);
     }
 
     /// Return the authors of the package
     pub fn authors(&self) -> Option<RCode> {
-        self.0.get("Authors@R").map(|s| s.parse().unwrap())
+        self.get("Authors@R").map(|s| s.parse().unwrap())
     }
 
     /// Set the authors of the package
     pub fn set_authors(&mut self, authors: &RCode) {
-        self.0.insert("Authors@R", &authors.to_string());
+        self.set_field("Authors@R", &authors.to_string());
     }
 
     /// Set the title of the package
     pub fn set_title(&mut self, title: &str) {
-        self.0.insert("Title", title);
+        self.set_field("Title", title);
     }
 
     /// Return the description of the package
     pub fn description(&self) -> Option<String> {
-        self.0.get("Description")
+        self.get("Description")
     }
 
     /// Set the description of the package
     pub fn set_description(&mut self, description: &str) {
-        self.0.insert("Description", description);
+        self.set_field("Description", description);
     }
 
     /// Return the version of the package
     pub fn version(&self) -> Option<String> {
-        self.0.get("Version")
+        self.get("Version")
     }
 
     /// Set the version of the package
     pub fn set_version(&mut self, version: &str) {
-        self.0.insert("Version", version);
+        self.set_field("Version", version);
     }
 
     /// Return the encoding of the description file
     pub fn encoding(&self) -> Option<String> {
-        self.0.get("Encoding")
+        self.get("Encoding")
     }
 
     /// Set the encoding of the description file
     pub fn set_encoding(&mut self, encoding: &str) {
-        self.0.insert("Encoding", encoding);
+        self.set_field("Encoding", encoding);
     }
 
     /// Return the license of the package
     pub fn license(&self) -> Option<String> {
-        self.0.get("License")
+        self.get("License")
     }
 
     /// Set the license of the package
     pub fn set_license(&mut self, license: &str) {
-        self.0.insert("License", license);
+        self.set_field("License", license);
     }
 
     /// Return the roxygen note
     pub fn roxygen_note(&self) -> Option<String> {
-        self.0.get("RoxygenNote")
+        self.get("RoxygenNote")
     }
 
     /// Set the roxygen note
     pub fn set_roxygen_note(&mut self, roxygen_note: &str) {
-        self.0.insert("RoxygenNote", roxygen_note);
+        self.set_field("RoxygenNote", roxygen_note);
     }
 
     /// Return the roxygen version
     pub fn roxygen(&self) -> Option<String> {
-        self.0.get("Roxygen")
+        self.get("Roxygen")
     }
 
     /// Set the roxygen version
     pub fn set_roxygen(&mut self, roxygen: &str) {
-        self.0.insert("Roxygen", roxygen);
+        self.set_field("Roxygen", roxygen);
     }
 
     /// Return the URL field
     pub fn url(&self) -> Option<String> {
         // TODO: parse list of URLs, separated by commas
-        self.0.get("URL")
+        self.get("URL")
     }
 
     /// Set the URL field
     pub fn set_url(&mut self, url: &str) {
         // TODO: parse list of URLs, separated by commas
-        self.0.insert("URL", url);
+        self.set_field("URL", url);
     }
 
     /// Return the bug reports URL
     pub fn bug_reports(&self) -> Option<url::Url> {
-        self.0
-            .get("BugReports")
+        self.get("BugReports")
             .map(|s| url::Url::parse(s.as_str()).unwrap())
     }
 
     /// Set the bug reports URL
     pub fn set_bug_reports(&mut self, bug_reports: &url::Url) {
-        self.0.insert("BugReports", bug_reports.as_str());
+        self.set_field("BugReports", bug_reports.as_str());
     }
 
     /// Return the imports field
     pub fn imports(&self) -> Option<Relations> {
-        self.0.get("Imports").map(|s| s.parse().unwrap())
+        self.get("Imports").map(|s| s.parse().unwrap())
     }
 
     /// Set the imports field
     pub fn set_imports(&mut self, imports: Relations) {
-        self.0.insert("Imports", &imports.to_string());
+        self.set_field("Imports", &imports.to_string());
     }
 
     /// Return the suggests field
     pub fn suggests(&self) -> Option<Relations> {
-        self.0.get("Suggests").map(|s| s.parse().unwrap())
+        self.get("Suggests").map(|s| s.parse().unwrap())
     }
 
     /// Set the suggests field
     pub fn set_suggests(&mut self, suggests: Relations) {
-        self.0.insert("Suggests", &suggests.to_string());
+        self.set_field("Suggests", &suggests.to_string());
     }
 
     /// Return the depends field
     pub fn depends(&self) -> Option<Relations> {
-        self.0.get("Depends").map(|s| s.parse().unwrap())
+        self.get("Depends").map(|s| s.parse().unwrap())
     }
 
     /// Set the depends field
     pub fn set_depends(&mut self, depends: Relations) {
-        self.0.insert("Depends", &depends.to_string());
+        self.set_field("Depends", &depends.to_string());
     }
 
     /// Return the linking-to field
     pub fn linking_to(&self) -> Option<Relations> {
-        self.0.get("LinkingTo").map(|s| s.parse().unwrap())
+        self.get("LinkingTo").map(|s| s.parse().unwrap())
     }
 
     /// Set the linking-to field
     pub fn set_linking_to(&mut self, linking_to: Relations) {
-        self.0.insert("LinkingTo", &linking_to.to_string());
+        self.set_field("LinkingTo", &linking_to.to_string());
     }
 
     /// Return the enhances field
     pub fn enhances(&self) -> Option<Relations> {
-        self.0.get("Enhances").map(|s| s.parse().unwrap())
+        self.get("Enhances").map(|s| s.parse().unwrap())
     }
 
     /// Set the enhances field
     pub fn set_enhances(&mut self, enhances: Relations) {
-        self.0.insert("Enhances", &enhances.to_string());
+        self.set_field("Enhances", &enhances.to_string());
     }
 
     /// Return the lazy data field
     pub fn lazy_data(&self) -> Option<bool> {
-        self.0.get("LazyData").map(|s| s == "true")
+        self.get("LazyData").map(|s| s == "true")
     }
 
     /// Set the lazy data field
     pub fn set_lazy_data(&mut self, lazy_data: bool) {
-        self.0
-            .insert("LazyData", if lazy_data { "true" } else { "false" });
+        self.set_field("LazyData", if lazy_data { "true" } else { "false" });
     }
 
     /// Return the collate field
     pub fn collate(&self) -> Option<String> {
-        self.0.get("Collate")
+        self.get("Collate")
     }
 
     /// Set the collate field
     pub fn set_collate(&mut self, collate: &str) {
-        self.0.insert("Collate", collate);
+        self.set_field("Collate", collate);
     }
 
     /// Return the vignette builder field
     pub fn vignette_builder(&self) -> Option<Vec<String>> {
-        self.0
-            .get("VignetteBuilder")
+        self.get("VignetteBuilder")
             .map(|s| s.split(',').map(|s| s.trim().to_string()).collect())
     }
 
     /// Set the vignette builder field
     pub fn set_vignette_builder(&mut self, vignette_builder: &[&str]) {
-        self.0
-            .insert("VignetteBuilder", &vignette_builder.join(", "));
+        self.set_field("VignetteBuilder", &vignette_builder.join(", "));
     }
 
     /// Return the system requirements field
     pub fn system_requirements(&self) -> Option<Vec<String>> {
-        self.0
-            .get("SystemRequirements")
+        self.get("SystemRequirements")
             .map(|s| s.split(',').map(|s| s.trim().to_string()).collect())
     }
 
     /// Set the system requirements field
     pub fn set_system_requirements(&mut self, system_requirements: &[&str]) {
-        self.0
-            .insert("SystemRequirements", &system_requirements.join(", "));
+        self.set_field("SystemRequirements", &system_requirements.join(", "));
     }
 
     /// Return the date field
     pub fn date(&self) -> Option<String> {
-        self.0.get("Date")
+        self.get("Date")
     }
 
     /// Set the date field
     pub fn set_date(&mut self, date: &str) {
-        self.0.insert("Date", date);
+        self.set_field("Date", date);
     }
 
     /// The R Repository to use for this package.
     ///
     /// E.g. "CRAN" or "Bioconductor"
     pub fn repository(&self) -> Option<String> {
-        self.0.get("Repository")
+        self.get("Repository")
     }
 
     /// Set the R Repository to use for this package.
     pub fn set_repository(&mut self, repository: &str) {
-        self.0.insert("Repository", repository);
+        self.set_field("Repository", repository);
     }
 }
 
@@ -692,21 +719,31 @@ pub mod relations {
         ($ast:ident, $kind:ident) => {
             /// A node in the syntax tree representing a $ast
             #[repr(transparent)]
-            pub struct $ast(SyntaxNode);
+            pub struct $ast(GreenNode);
             impl $ast {
                 #[allow(unused)]
                 fn cast(node: SyntaxNode) -> Option<Self> {
                     if node.kind() == $kind {
-                        Some(Self(node))
+                        Some(Self(node.green().into_owned()))
                     } else {
                         None
                     }
+                }
+
+                fn syntax_node(&self) -> SyntaxNode {
+                    SyntaxNode::new_root_mut(self.0.clone())
+                }
+            }
+
+            impl Clone for $ast {
+                fn clone(&self) -> Self {
+                    Self(self.0.clone())
                 }
             }
 
             impl std::fmt::Display for $ast {
                 fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                    f.write_str(&self.0.text().to_string())
+                    write!(f, "{}", self.0)
                 }
             }
         };
@@ -813,12 +850,16 @@ pub mod relations {
         }
 
         /// Iterate over the entries in this relations field
-        pub fn relations(&self) -> impl Iterator<Item = Relation> + '_ {
-            self.0.children().filter_map(Relation::cast)
+        pub fn relations(&self) -> impl Iterator<Item = Relation> {
+            self.syntax_node()
+                .children()
+                .filter_map(Relation::cast)
+                .collect::<Vec<_>>()
+                .into_iter()
         }
 
         /// Iterate over the entries in this relations field
-        pub fn iter(&self) -> impl Iterator<Item = Relation> + '_ {
+        pub fn iter(&self) -> impl Iterator<Item = Relation> {
             self.relations()
         }
 
@@ -829,59 +870,69 @@ pub mod relations {
 
         /// Remove the relation at the given index
         pub fn remove_relation(&mut self, idx: usize) -> Relation {
-            let mut relation = self.get_relation(idx).unwrap();
-            relation.remove();
+            let node = self.syntax_node();
+            let relation_node = node
+                .children()
+                .filter(|n| n.kind() == RELATION)
+                .nth(idx)
+                .unwrap();
+            let relation = Relation::cast(relation_node.clone()).unwrap();
+            remove_relation_node(&relation_node);
+            self.0 = node.green().into_owned();
             relation
         }
 
         /// Insert a new relation at the given index
         pub fn insert(&mut self, idx: usize, relation: Relation) {
-            let is_empty = !self.0.children_with_tokens().any(|n| n.kind() == COMMA);
-            let (position, new_children) = if let Some(current_relation) = self.relations().nth(idx)
+            let node = self.syntax_node();
+            let is_empty = !node.children_with_tokens().any(|n| n.kind() == COMMA);
+            let (position, new_children) = if let Some(current_relation) =
+                node.children().filter(|n| n.kind() == RELATION).nth(idx)
             {
                 let to_insert: Vec<NodeOrToken<GreenNode, GreenToken>> = if idx == 0 && is_empty {
-                    vec![relation.0.green().into()]
+                    vec![relation.0.into()]
                 } else {
                     vec![
-                        relation.0.green().into(),
+                        relation.0.into(),
                         NodeOrToken::Token(GreenToken::new(COMMA.into(), ",")),
                         NodeOrToken::Token(GreenToken::new(WHITESPACE.into(), " ")),
                     ]
                 };
 
-                (current_relation.0.index(), to_insert)
+                (current_relation.index(), to_insert)
             } else {
-                let child_count = self.0.children_with_tokens().count();
+                let child_count = node.children_with_tokens().count();
                 (
                     child_count,
                     if idx == 0 {
-                        vec![relation.0.green().into()]
+                        vec![relation.0.into()]
                     } else {
                         vec![
                             NodeOrToken::Token(GreenToken::new(COMMA.into(), ",")),
                             NodeOrToken::Token(GreenToken::new(WHITESPACE.into(), " ")),
-                            relation.0.green().into(),
+                            relation.0.into(),
                         ]
                     },
                 )
             };
-            // We can safely replace the root here since Relations is a root node
-            self.0 = SyntaxNode::new_root_mut(
-                self.0.replace_with(
-                    self.0
-                        .green()
-                        .splice_children(position..position, new_children),
-                ),
-            );
+            self.0 = node
+                .green()
+                .splice_children(position..position, new_children);
         }
 
         /// Replace the relation at the given index
         pub fn replace(&mut self, idx: usize, relation: Relation) {
-            let current_relation = self.get_relation(idx).unwrap();
-            self.0.splice_children(
-                current_relation.0.index()..current_relation.0.index() + 1,
-                vec![relation.0.into()],
+            let node = self.syntax_node();
+            let current_relation = node
+                .children()
+                .filter(|n| n.kind() == RELATION)
+                .nth(idx)
+                .unwrap();
+            node.splice_children(
+                current_relation.index()..current_relation.index() + 1,
+                vec![SyntaxNode::new_root_mut(relation.0).into()],
             );
+            self.0 = node.green().into_owned();
         }
 
         /// Push a new relation to the relations field
@@ -924,10 +975,10 @@ pub mod relations {
                     builder.token(COMMA.into(), ",");
                     builder.token(WHITESPACE.into(), " ");
                 }
-                inject(&mut builder, relation.0);
+                inject(&mut builder, relation.syntax_node());
             }
             builder.finish_node();
-            Relations(SyntaxNode::new_root_mut(builder.finish()))
+            Relations(builder.finish())
         }
     }
 
@@ -994,6 +1045,52 @@ pub mod relations {
         builder.finish_node();
     }
 
+    fn remove_relation_node(node: &SyntaxNode) {
+        let is_first = !node
+            .siblings(Direction::Prev)
+            .skip(1)
+            .any(|n| n.kind() == RELATION);
+        if !is_first {
+            while let Some(n) = node.prev_sibling_or_token() {
+                if n.kind() == WHITESPACE || n.kind() == NEWLINE {
+                    n.detach();
+                } else if n.kind() == COMMA {
+                    n.detach();
+                    break;
+                } else {
+                    break;
+                }
+            }
+            while let Some(n) = node.prev_sibling_or_token() {
+                if n.kind() == WHITESPACE || n.kind() == NEWLINE {
+                    n.detach();
+                } else {
+                    break;
+                }
+            }
+        } else {
+            while let Some(n) = node.next_sibling_or_token() {
+                if n.kind() == WHITESPACE || n.kind() == NEWLINE {
+                    n.detach();
+                } else if n.kind() == COMMA {
+                    n.detach();
+                    break;
+                } else {
+                    break;
+                }
+            }
+
+            while let Some(n) = node.next_sibling_or_token() {
+                if n.kind() == WHITESPACE || n.kind() == NEWLINE {
+                    n.detach();
+                } else {
+                    break;
+                }
+            }
+        }
+        node.detach();
+    }
+
     impl Relation {
         /// Create a new relation
         ///
@@ -1030,7 +1127,7 @@ pub mod relations {
             }
 
             builder.finish_node();
-            Relation(SyntaxNode::new_root_mut(builder.finish()))
+            Relation(builder.finish())
         }
 
         /// Wrap and sort this relation
@@ -1059,7 +1156,7 @@ pub mod relations {
                 builder.finish_node();
             }
             builder.finish_node();
-            Relation(SyntaxNode::new_root_mut(builder.finish()))
+            Relation(builder.finish())
         }
 
         /// Create a new simple relation, without any version constraints.
@@ -1085,7 +1182,8 @@ pub mod relations {
         /// assert_eq!(relation.to_string(), "vign");
         /// ```
         pub fn drop_constraint(&mut self) -> bool {
-            let version_token = self.0.children().find(|n| n.kind() == VERSION);
+            let node = self.syntax_node();
+            let version_token = node.children().find(|n| n.kind() == VERSION);
             if let Some(version_token) = version_token {
                 // Remove any whitespace before the version token
                 while let Some(prev) = version_token.prev_sibling_or_token() {
@@ -1096,6 +1194,7 @@ pub mod relations {
                     }
                 }
                 version_token.detach();
+                self.0 = node.green().into_owned();
                 return true;
             }
 
@@ -1111,7 +1210,7 @@ pub mod relations {
         /// assert_eq!(relation.name(), "vign");
         /// ```
         pub fn name(&self) -> String {
-            self.0
+            self.syntax_node()
                 .children_with_tokens()
                 .find_map(|it| match it {
                     SyntaxElement::Token(token) if token.kind() == IDENT => Some(token),
@@ -1124,7 +1223,8 @@ pub mod relations {
 
         /// Return the version constraint and the version it is constrained to.
         pub fn version(&self) -> Option<(VersionConstraint, Version)> {
-            let vc = self.0.children().find(|n| n.kind() == VERSION);
+            let node = self.syntax_node();
+            let vc = node.children().find(|n| n.kind() == VERSION);
             let vc = vc.as_ref()?;
             let constraint = vc.children().find(|n| n.kind() == CONSTRAINT);
 
@@ -1152,7 +1252,8 @@ pub mod relations {
         /// assert_eq!(relation.to_string(), "vign (>= 2.0)");
         /// ```
         pub fn set_version(&mut self, version_constraint: Option<(VersionConstraint, Version)>) {
-            let current_version = self.0.children().find(|n| n.kind() == VERSION);
+            let node = self.syntax_node();
+            let current_version = node.children().find(|n| n.kind() == VERSION);
             if let Some((vc, version)) = version_constraint {
                 let mut builder = GreenNodeBuilder::new();
                 builder.start_node(VERSION.into());
@@ -1166,12 +1267,12 @@ pub mod relations {
                 builder.finish_node(); // VERSION
 
                 if let Some(current_version) = current_version {
-                    self.0.splice_children(
+                    node.splice_children(
                         current_version.index()..current_version.index() + 1,
                         vec![SyntaxNode::new_root_mut(builder.finish()).into()],
                     );
                 } else {
-                    let name_node = self.0.children_with_tokens().find(|n| n.kind() == IDENT);
+                    let name_node = node.children_with_tokens().find(|n| n.kind() == IDENT);
                     let idx = if let Some(name_node) = name_node {
                         name_node.index() + 1
                     } else {
@@ -1181,24 +1282,8 @@ pub mod relations {
                         GreenToken::new(WHITESPACE.into(), " ").into(),
                         builder.finish().into(),
                     ];
-                    let new_root = SyntaxNode::new_root_mut(
-                        self.0.green().splice_children(idx..idx, new_children),
-                    );
-                    if let Some(parent) = self.0.parent() {
-                        parent.splice_children(
-                            self.0.index()..self.0.index() + 1,
-                            vec![new_root.into()],
-                        );
-                        self.0 = parent
-                            .children_with_tokens()
-                            .nth(self.0.index())
-                            .unwrap()
-                            .clone()
-                            .into_node()
-                            .unwrap();
-                    } else {
-                        self.0 = new_root;
-                    }
+                    self.0 = node.green().splice_children(idx..idx, new_children);
+                    return;
                 }
             } else if let Some(current_version) = current_version {
                 // Remove any whitespace before the version token
@@ -1211,68 +1296,28 @@ pub mod relations {
                 }
                 current_version.detach();
             }
+            self.0 = node.green().into_owned();
         }
 
         /// Remove this relation
         ///
+        /// Relations are owned snapshots. To remove an entry from a relations field,
+        /// use [`Relations::remove_relation`].
+        ///
         /// # Example
         /// ```
-        /// use r_description::lossless::{Relation, Relations};
+        /// use r_description::lossless::Relations;
         /// let mut relations: Relations = r"cli (>= 0.19.0), blah (< 1.26.0)".parse().unwrap();
-        /// let mut relation = relations.get_relation(0).unwrap();
+        /// let relation = relations.remove_relation(0);
         /// assert_eq!(relation.to_string(), "cli (>= 0.19.0)");
-        /// relation.remove();
         /// assert_eq!(relations.to_string(), "blah (< 1.26.0)");
         /// ```
         pub fn remove(&mut self) {
-            let is_first = !self
-                .0
-                .siblings(Direction::Prev)
-                .skip(1)
-                .any(|n| n.kind() == RELATION);
-            if !is_first {
-                // Not the first item in the list. Remove whitespace backwards to the previous
-                // pipe, the pipe and any whitespace until the previous relation
-                while let Some(n) = self.0.prev_sibling_or_token() {
-                    if n.kind() == WHITESPACE || n.kind() == NEWLINE {
-                        n.detach();
-                    } else if n.kind() == COMMA {
-                        n.detach();
-                        break;
-                    } else {
-                        break;
-                    }
-                }
-                while let Some(n) = self.0.prev_sibling_or_token() {
-                    if n.kind() == WHITESPACE || n.kind() == NEWLINE {
-                        n.detach();
-                    } else {
-                        break;
-                    }
-                }
-            } else {
-                // First item in the list. Remove whitespace up to the pipe, the pipe and anything
-                // before the next relation
-                while let Some(n) = self.0.next_sibling_or_token() {
-                    if n.kind() == WHITESPACE || n.kind() == NEWLINE {
-                        n.detach();
-                    } else if n.kind() == COMMA {
-                        n.detach();
-                        break;
-                    } else {
-                        panic!("Unexpected node: {n:?}");
-                    }
-                }
-
-                while let Some(n) = self.0.next_sibling_or_token() {
-                    if n.kind() == WHITESPACE || n.kind() == NEWLINE {
-                        n.detach();
-                    } else {
-                        break;
-                    }
-                }
+            let node = self.syntax_node();
+            if node.parent().is_some() {
+                remove_relation_node(&node);
+                self.0 = node.green().into_owned();
             }
-            self.0.detach();
         }
 
         /// Check if this relation is satisfied by the given package version.
@@ -1613,6 +1658,38 @@ pub mod relations {
         }
 
         #[test]
+        fn test_clone_relations() {
+            let rels: Relations = r#"cli (>= 0.20.21), cli (< 0.21)"#.parse().unwrap();
+            let mut cloned = rels.clone();
+
+            assert_eq!(cloned, rels);
+            cloned.push(Relation::simple("glue"));
+
+            assert_eq!(rels.to_string(), "cli (>= 0.20.21), cli (< 0.21)");
+            assert_eq!(cloned.to_string(), "cli (>= 0.20.21), cli (< 0.21), glue");
+        }
+
+        #[test]
+        fn test_clone_relation() {
+            let relation: Relation = "cli (>= 2.5-1)".parse().unwrap();
+            let mut cloned = relation.clone();
+
+            assert_eq!(cloned, relation);
+            cloned.drop_constraint();
+
+            assert_eq!(relation.to_string(), "cli (>= 2.5-1)");
+            assert_eq!(cloned.to_string(), "cli");
+        }
+
+        #[test]
+        fn test_relations_are_send_sync() {
+            fn assert_send_sync<T: Send + Sync>() {}
+
+            assert_send_sync::<Relation>();
+            assert_send_sync::<Relations>();
+        }
+
+        #[test]
         fn test_parse_relation() {
             let parsed: Relation = "cli (>= 0.20.21)".parse().unwrap();
             assert_eq!(parsed.to_string(), "cli (>= 0.20.21)");
@@ -1858,6 +1935,50 @@ Enhances: shiny
         assert_eq!(
             desc.enhances().unwrap().iter().next().unwrap().name(),
             "shiny"
+        );
+    }
+
+    #[test]
+    fn test_set_imports_replaces_existing_field() {
+        let mut desc: RDescription = r###"Package: mypackage
+Title: What the Package Does
+Version: 1.0.0
+Description: What the package does.
+License: MIT
+Imports: cli
+"###
+        .parse()
+        .unwrap();
+
+        desc.set_imports("glue".parse().unwrap());
+
+        assert_eq!(desc.imports().unwrap().to_string(), "glue");
+        let rendered = desc.to_string();
+        assert_eq!(rendered.matches("Imports:").count(), 1);
+        assert_eq!(
+            rendered,
+            "Package: mypackage\nTitle: What the Package Does\nVersion: 1.0.0\nDescription: What the package does.\nLicense: MIT\nImports: glue\n"
+        );
+    }
+
+    #[test]
+    fn test_r_description_is_send_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+
+        assert_send_sync::<RDescription>();
+    }
+
+    #[test]
+    fn test_r_description_mutation_preserves_extra_paragraphs() {
+        let mut desc: RDescription = "Package: mypackage\n\nMaintainer: Example Person\n"
+            .parse()
+            .unwrap();
+
+        desc.set_title("What the Package Does");
+
+        assert_eq!(
+            desc.to_string(),
+            "Package: mypackage\nTitle: What the Package Does\n\nMaintainer: Example Person\n"
         );
     }
 }
