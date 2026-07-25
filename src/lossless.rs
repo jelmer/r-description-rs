@@ -335,22 +335,6 @@ impl RDescription {
         self.0
             .set("Additional_repositories", &repositories.join(", "));
     }
-
-    /// Return the underlying paragraph.
-    ///
-    /// This is an escape hatch for fields that this struct does not expose a
-    /// typed accessor for.
-    pub fn as_paragraph(&self) -> &Paragraph {
-        &self.0
-    }
-
-    /// Return a mutable reference to the underlying paragraph.
-    ///
-    /// This is an escape hatch for fields that this struct does not expose a
-    /// typed accessor for.
-    pub fn as_paragraph_mut(&mut self) -> &mut Paragraph {
-        &mut self.0
-    }
 }
 
 pub mod relations {
