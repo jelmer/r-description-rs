@@ -28,6 +28,18 @@ impl Default for RDescription {
     }
 }
 
+impl From<RDescription> for Paragraph {
+    fn from(description: RDescription) -> Self {
+        description.0
+    }
+}
+
+impl From<Paragraph> for RDescription {
+    fn from(paragraph: Paragraph) -> Self {
+        Self(paragraph)
+    }
+}
+
 #[derive(Debug)]
 /// Error type for parsing DESCRIPTION files
 pub enum Error {
@@ -1773,7 +1785,7 @@ mod tests {
         let s = r###"Package: mypackage
 Title: What the Package Does (One Line, Title Case)
 Version: 0.0.0.9000
-Authors@R: 
+Authors@R:
     person("First", "Last", , "first.last@example.com", role = c("aut", "cre"),
            comment = c(ORCID = "YOUR-ORCID-ID"))
 Description: What the package does (one paragraph).
