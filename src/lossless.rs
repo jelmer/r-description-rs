@@ -28,6 +28,18 @@ impl Default for RDescription {
     }
 }
 
+impl From<RDescription> for Paragraph {
+    fn from(description: RDescription) -> Self {
+        description.0
+    }
+}
+
+impl From<Paragraph> for RDescription {
+    fn from(paragraph: Paragraph) -> Self {
+        Self(paragraph)
+    }
+}
+
 #[derive(Debug)]
 /// Error type for parsing DESCRIPTION files
 pub enum Error {
