@@ -82,7 +82,7 @@ impl RDescription {
 
     /// Set the package name
     pub fn set_package(&mut self, package: &str) {
-        self.0.insert("Package", package);
+        self.0.set("Package", package);
     }
 
     /// One line description of the package, and is often shown in a package listing
@@ -100,7 +100,7 @@ impl RDescription {
 
     /// Set the maintainer of the package
     pub fn set_maintainer(&mut self, maintainer: &str) {
-        self.0.insert("Maintainer", maintainer);
+        self.0.set("Maintainer", maintainer);
     }
 
     /// Return the authors of the package
@@ -110,12 +110,12 @@ impl RDescription {
 
     /// Set the authors of the package
     pub fn set_authors(&mut self, authors: &RCode) {
-        self.0.insert("Authors@R", &authors.to_string());
+        self.0.set("Authors@R", &authors.to_string());
     }
 
     /// Set the title of the package
     pub fn set_title(&mut self, title: &str) {
-        self.0.insert("Title", title);
+        self.0.set("Title", title);
     }
 
     /// Return the description of the package
@@ -125,7 +125,7 @@ impl RDescription {
 
     /// Set the description of the package
     pub fn set_description(&mut self, description: &str) {
-        self.0.insert("Description", description);
+        self.0.set("Description", description);
     }
 
     /// Return the version of the package
@@ -135,7 +135,7 @@ impl RDescription {
 
     /// Set the version of the package
     pub fn set_version(&mut self, version: &str) {
-        self.0.insert("Version", version);
+        self.0.set("Version", version);
     }
 
     /// Return the encoding of the description file
@@ -145,7 +145,7 @@ impl RDescription {
 
     /// Set the encoding of the description file
     pub fn set_encoding(&mut self, encoding: &str) {
-        self.0.insert("Encoding", encoding);
+        self.0.set("Encoding", encoding);
     }
 
     /// Return the license of the package
@@ -155,7 +155,7 @@ impl RDescription {
 
     /// Set the license of the package
     pub fn set_license(&mut self, license: &str) {
-        self.0.insert("License", license);
+        self.0.set("License", license);
     }
 
     /// Return the roxygen note
@@ -165,7 +165,7 @@ impl RDescription {
 
     /// Set the roxygen note
     pub fn set_roxygen_note(&mut self, roxygen_note: &str) {
-        self.0.insert("RoxygenNote", roxygen_note);
+        self.0.set("RoxygenNote", roxygen_note);
     }
 
     /// Return the roxygen version
@@ -175,7 +175,7 @@ impl RDescription {
 
     /// Set the roxygen version
     pub fn set_roxygen(&mut self, roxygen: &str) {
-        self.0.insert("Roxygen", roxygen);
+        self.0.set("Roxygen", roxygen);
     }
 
     /// Return the URL field
@@ -187,7 +187,7 @@ impl RDescription {
     /// Set the URL field
     pub fn set_url(&mut self, url: &str) {
         // TODO: parse list of URLs, separated by commas
-        self.0.insert("URL", url);
+        self.0.set("URL", url);
     }
 
     /// Return the bug reports URL
@@ -199,7 +199,7 @@ impl RDescription {
 
     /// Set the bug reports URL
     pub fn set_bug_reports(&mut self, bug_reports: &url::Url) {
-        self.0.insert("BugReports", bug_reports.as_str());
+        self.0.set("BugReports", bug_reports.as_str());
     }
 
     /// Return the imports field
@@ -209,7 +209,7 @@ impl RDescription {
 
     /// Set the imports field
     pub fn set_imports(&mut self, imports: Relations) {
-        self.0.insert("Imports", &imports.to_string());
+        self.0.set("Imports", &imports.to_string());
     }
 
     /// Return the suggests field
@@ -219,7 +219,7 @@ impl RDescription {
 
     /// Set the suggests field
     pub fn set_suggests(&mut self, suggests: Relations) {
-        self.0.insert("Suggests", &suggests.to_string());
+        self.0.set("Suggests", &suggests.to_string());
     }
 
     /// Return the depends field
@@ -229,7 +229,7 @@ impl RDescription {
 
     /// Set the depends field
     pub fn set_depends(&mut self, depends: Relations) {
-        self.0.insert("Depends", &depends.to_string());
+        self.0.set("Depends", &depends.to_string());
     }
 
     /// Return the linking-to field
@@ -239,7 +239,7 @@ impl RDescription {
 
     /// Set the linking-to field
     pub fn set_linking_to(&mut self, linking_to: Relations) {
-        self.0.insert("LinkingTo", &linking_to.to_string());
+        self.0.set("LinkingTo", &linking_to.to_string());
     }
 
     /// Return the enhances field
@@ -249,7 +249,7 @@ impl RDescription {
 
     /// Set the enhances field
     pub fn set_enhances(&mut self, enhances: Relations) {
-        self.0.insert("Enhances", &enhances.to_string());
+        self.0.set("Enhances", &enhances.to_string());
     }
 
     /// Return the lazy data field
@@ -260,7 +260,7 @@ impl RDescription {
     /// Set the lazy data field
     pub fn set_lazy_data(&mut self, lazy_data: bool) {
         self.0
-            .insert("LazyData", if lazy_data { "true" } else { "false" });
+            .set("LazyData", if lazy_data { "true" } else { "false" });
     }
 
     /// Return the collate field
@@ -270,7 +270,7 @@ impl RDescription {
 
     /// Set the collate field
     pub fn set_collate(&mut self, collate: &str) {
-        self.0.insert("Collate", collate);
+        self.0.set("Collate", collate);
     }
 
     /// Return the vignette builder field
@@ -282,8 +282,7 @@ impl RDescription {
 
     /// Set the vignette builder field
     pub fn set_vignette_builder(&mut self, vignette_builder: &[&str]) {
-        self.0
-            .insert("VignetteBuilder", &vignette_builder.join(", "));
+        self.0.set("VignetteBuilder", &vignette_builder.join(", "));
     }
 
     /// Return the system requirements field
@@ -296,7 +295,7 @@ impl RDescription {
     /// Set the system requirements field
     pub fn set_system_requirements(&mut self, system_requirements: &[&str]) {
         self.0
-            .insert("SystemRequirements", &system_requirements.join(", "));
+            .set("SystemRequirements", &system_requirements.join(", "));
     }
 
     /// Return the date field
@@ -306,7 +305,7 @@ impl RDescription {
 
     /// Set the date field
     pub fn set_date(&mut self, date: &str) {
-        self.0.insert("Date", date);
+        self.0.set("Date", date);
     }
 
     /// The R Repository to use for this package.
@@ -318,7 +317,7 @@ impl RDescription {
 
     /// Set the R Repository to use for this package.
     pub fn set_repository(&mut self, repository: &str) {
-        self.0.insert("Repository", repository);
+        self.0.set("Repository", repository);
     }
 
     /// Additional repositories where dependency packages may be found.
@@ -334,7 +333,7 @@ impl RDescription {
     /// Set the additional repositories field.
     pub fn set_additional_repositories(&mut self, repositories: &[&str]) {
         self.0
-            .insert("Additional_repositories", &repositories.join(", "));
+            .set("Additional_repositories", &repositories.join(", "));
     }
 }
 
@@ -1773,7 +1772,7 @@ mod tests {
         let s = r###"Package: mypackage
 Title: What the Package Does (One Line, Title Case)
 Version: 0.0.0.9000
-Authors@R: 
+Authors@R:
     person("First", "Last", , "first.last@example.com", role = c("aut", "cre"),
            comment = c(ORCID = "YOUR-ORCID-ID"))
 Description: What the package does (one paragraph).
@@ -1815,6 +1814,44 @@ comment = c(ORCID = "YOUR-ORCID-ID"))"#
         assert_eq!(desc.roxygen_note(), Some("7.3.2".to_string()));
 
         assert_eq!(desc.to_string(), s);
+    }
+
+    #[test]
+    fn test_setters_replace_existing_fields() {
+        let s = r###"Package: mypackage
+Title: What the Package Does (One Line, Title Case)
+Version: 0.0.0.9000
+Description: What the package does (one paragraph).
+Encoding: UTF-8
+"###;
+        let mut desc: RDescription = s.parse().unwrap();
+
+        desc.set_version("0.0.1");
+
+        // the field is updated in place rather than appended a second time
+        assert_eq!(desc.version(), Some("0.0.1".to_string()));
+        assert_eq!(desc.to_string().matches("Version:").count(), 1);
+
+        assert_eq!(
+            desc.to_string(),
+            r###"Package: mypackage
+Title: What the Package Does (One Line, Title Case)
+Version: 0.0.1
+Description: What the package does (one paragraph).
+Encoding: UTF-8
+"###
+        );
+    }
+
+    #[test]
+    fn test_setters_add_missing_fields() {
+        let s = "Package: mypackage\n";
+        let mut desc: RDescription = s.parse().unwrap();
+
+        desc.set_version("0.0.1");
+
+        assert_eq!(desc.version(), Some("0.0.1".to_string()));
+        assert_eq!(desc.to_string(), "Package: mypackage\nVersion: 0.0.1\n");
     }
 
     #[test]
