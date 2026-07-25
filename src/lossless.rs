@@ -353,18 +353,6 @@ impl RDescription {
     }
 }
 
-impl From<RDescription> for Paragraph {
-    fn from(description: RDescription) -> Self {
-        description.0
-    }
-}
-
-impl From<Paragraph> for RDescription {
-    fn from(paragraph: Paragraph) -> Self {
-        Self(paragraph)
-    }
-}
-
 pub mod relations {
     //! Parser for relationship fields like `Depends`, `Recommends`, etc.
     //!
@@ -1800,7 +1788,7 @@ mod tests {
         let s = r###"Package: mypackage
 Title: What the Package Does (One Line, Title Case)
 Version: 0.0.0.9000
-Authors@R: 
+Authors@R:
     person("First", "Last", , "first.last@example.com", role = c("aut", "cre"),
            comment = c(ORCID = "YOUR-ORCID-ID"))
 Description: What the package does (one paragraph).
@@ -1880,20 +1868,6 @@ Encoding: UTF-8
 
         assert_eq!(desc.version(), Some("0.0.1".to_string()));
         assert_eq!(desc.to_string(), "Package: mypackage\nVersion: 0.0.1\n");
-    }
-
-    #[test]
-    fn test_paragraph_conversion_round_trip() {
-        let s = r###"Package: mypackage
-Version: 0.0.0.9000
-"###;
-        let desc: RDescription = s.parse().unwrap();
-
-        let paragraph: Paragraph = desc.into();
-        assert_eq!(paragraph.get("Package"), Some("mypackage".to_string()));
-
-        let desc: RDescription = paragraph.into();
-        assert_eq!(desc.to_string(), s);
     }
 
     #[test]
