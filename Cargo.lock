@@ -230,7 +230,7 @@ dependencies = [
 
 [[package]]
 name = "r-description"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "deb822-derive",
  "deb822-fast",
