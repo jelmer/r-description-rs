@@ -14,7 +14,7 @@ use crate::RCode;
 use std::iter::Peekable;
 
 use crate::relations::SyntaxKind::*;
-use crate::relations::{lex, SyntaxKind, VersionConstraint};
+use crate::relations::{lex, RelationParseError, SyntaxKind, VersionConstraint};
 use crate::version::Version;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -380,7 +380,7 @@ impl std::fmt::Display for Relations {
 }
 
 impl std::str::FromStr for Relation {
-    type Err = String;
+    type Err = RelationParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let tokens = lex(s);
@@ -399,7 +399,7 @@ impl std::str::FromStr for Relation {
 
         let name = match tokens.next() {
             Some((IDENT, name)) => name,
-            _ => return Err("Expected package name".to_string()),
+            _ => return Err(RelationParseError::MissingPackageName),
         };
 
         eat_whitespace(&mut tokens);
@@ -417,18 +417,26 @@ impl std::str::FromStr for Relation {
                     _ => break,
                 }
             }
-            let constraint = constraint.parse()?;
+            if constraint.is_empty() {
+                return Err(RelationParseError::MissingConstraint);
+            }
+            let constraint = constraint
+                .parse()
+                .map_err(RelationParseError::InvalidConstraint)?;
             eat_whitespace(&mut tokens);
             // Read IDENT and COLON tokens until we see R_PARENS
             let version_string = match tokens.next() {
                 Some((IDENT, s)) => s,
-                _ => return Err("Expected version string".to_string()),
+                _ => return Err(RelationParseError::MissingVersion),
             };
-            let version: Version = version_string.parse().map_err(|e: String| e.to_string())?;
+            let version: Version = version_string
+                .parse()
+                .map_err(RelationParseError::InvalidVersion)?;
             eat_whitespace(&mut tokens);
-            if let Some((R_PARENS, _)) = tokens.next() {
-            } else {
-                return Err(format!("Expected ')', found {:?}", tokens.next()));
+            match tokens.next() {
+                Some((R_PARENS, _)) => {}
+                Some((_, token)) => return Err(RelationParseError::UnexpectedToken(token)),
+                None => return Err(RelationParseError::MissingClosingParenthesis),
             }
             Some((constraint, version))
         } else {
@@ -437,8 +445,8 @@ impl std::str::FromStr for Relation {
 
         eat_whitespace(&mut tokens);
 
-        if let Some((kind, _)) = tokens.next() {
-            return Err(format!("Unexpected token: {kind:?}"));
+        if let Some((_, token)) = tokens.next() {
+            return Err(RelationParseError::UnexpectedToken(token));
         }
 
         Ok(Relation { name, version })
@@ -446,7 +454,7 @@ impl std::str::FromStr for Relation {
 }
 
 impl std::str::FromStr for Relations {
-    type Err = String;
+    type Err = RelationParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let mut relations = Vec::new();
@@ -849,5 +857,34 @@ Remotes: r-lib/httr@v0.4 gitlab::jimhester/covr
                     .to_string()
             )
         );
+    }
+
+    #[test]
+    fn test_relation_parse_errors() {
+        use crate::{VersionConstraintParseError, VersionParseError};
+        for (input, expected) in [
+            ("(>= 1.0)", RelationParseError::MissingPackageName),
+            ("foo (1.0)", RelationParseError::MissingConstraint),
+            (
+                "foo (>>= 1.0)",
+                RelationParseError::InvalidConstraint(VersionConstraintParseError(
+                    ">>=".to_string(),
+                )),
+            ),
+            ("foo (>=)", RelationParseError::MissingVersion),
+            (
+                "foo (>= 1)",
+                RelationParseError::InvalidVersion(VersionParseError::TooFewComponents(
+                    "1".to_string(),
+                )),
+            ),
+            ("foo (>= 1.0", RelationParseError::MissingClosingParenthesis),
+            (
+                "foo bar",
+                RelationParseError::UnexpectedToken("bar".to_string()),
+            ),
+        ] {
+            assert_eq!(input.parse::<Relation>(), Err(expected), "{input}");
+        }
     }
 }

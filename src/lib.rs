@@ -5,12 +5,14 @@ pub mod lossless;
 pub mod lossy;
 
 mod relations;
-pub use relations::{VersionConstraint, VersionLookup};
+pub use relations::{
+    RelationParseError, VersionConstraint, VersionConstraintParseError, VersionLookup,
+};
 
 pub use lossy::RDescription;
 
 mod version;
-pub use version::Version;
+pub use version::{Version, VersionParseError};
 
 pub mod remotes;
 pub use remotes::{
@@ -26,7 +28,7 @@ pub use remotes::{
 pub struct RCode(String);
 
 impl std::str::FromStr for RCode {
-    type Err = std::num::ParseIntError;
+    type Err = std::convert::Infallible;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(Self(s.to_string()))
