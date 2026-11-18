@@ -731,24 +731,45 @@ pub mod relations {
                     self.bump();
                     self.skip_ws();
 
-                    self.builder.start_node(CONSTRAINT.into());
-
-                    while self.current() == Some(L_ANGLE)
-                        || self.current() == Some(R_ANGLE)
-                        || self.current() == Some(EQUAL)
-                        || self.current() == Some(NOT)
-                    {
-                        self.bump();
+                    let operator: Vec<&str> = self
+                        .tokens
+                        .iter()
+                        .rev()
+                        .take_while(|(kind, _)| matches!(kind, L_ANGLE | R_ANGLE | EQUAL | NOT))
+                        .map(|(_, text)| text.as_str())
+                        .collect();
+                    let operator_len = operator.len();
+                    let operator = operator.concat();
+                    if operator.is_empty() {
+                        self.errors.push("Expected version constraint".to_string());
+                    } else {
+                        // Invalid operators are kept in an error node so that
+                        // Relation::version() does not see them.
+                        let kind = if operator.parse::<VersionConstraint>().is_ok() {
+                            CONSTRAINT
+                        } else {
+                            self.errors
+                                .push(format!("Invalid version constraint: {operator}"));
+                            ERROR
+                        };
+                        self.builder.start_node(kind.into());
+                        for _ in 0..operator_len {
+                            self.bump();
+                        }
+                        self.builder.finish_node();
                     }
-
-                    self.builder.finish_node();
 
                     self.skip_ws();
 
-                    if self.current() == Some(IDENT) {
-                        self.bump();
-                    } else {
-                        self.error("Expected version".to_string());
+                    match self.tokens.last() {
+                        Some((IDENT, text)) => {
+                            if let Err(e) = text.parse::<Version>() {
+                                self.error(e);
+                            } else {
+                                self.bump();
+                            }
+                        }
+                        _ => self.error("Expected version".to_string()),
                     }
 
                     if self.current() == Some(R_PARENS) {
@@ -1773,6 +1794,47 @@ pub mod relations {
             let relation = Relation::simple("bar");
             rels.insert(0, relation);
             assert_eq!(rels.to_string(), "bar, debhelper (>= 1.0), @foo@, bla");
+        }
+
+        #[test]
+        fn test_invalid_constraint() {
+            assert_eq!(
+                "foo (>>= 1.0)".parse::<Relations>().unwrap_err(),
+                "Invalid version constraint: >>="
+            );
+            let (rels, errors) = Relations::parse_relaxed("foo (>>= 1.0), bar (>= 2.0)");
+            assert_eq!(errors, vec!["Invalid version constraint: >>="]);
+            assert_eq!(rels.to_string(), "foo (>>= 1.0), bar (>= 2.0)");
+            let versions: Vec<_> = rels.relations().map(|r| r.version()).collect();
+            assert_eq!(
+                versions,
+                vec![
+                    None,
+                    Some((VersionConstraint::GreaterThanEqual, "2.0".parse().unwrap()))
+                ]
+            );
+        }
+
+        #[test]
+        fn test_missing_constraint() {
+            assert_eq!(
+                "foo (1.0)".parse::<Relations>().unwrap_err(),
+                "Expected version constraint"
+            );
+            let (rels, _) = Relations::parse_relaxed("foo (1.0)");
+            assert_eq!(rels.relations().next().unwrap().version(), None);
+        }
+
+        #[test]
+        fn test_invalid_version() {
+            assert_eq!(
+                "foo (>= 1.0-beta)".parse::<Relations>().unwrap_err(),
+                "Invalid version component: 1.0-beta"
+            );
+            let (rels, errors) = Relations::parse_relaxed("foo (>= 1.0-beta)");
+            assert_eq!(errors, vec!["Invalid version component: 1.0-beta"]);
+            assert_eq!(rels.to_string(), "foo (>= 1.0-beta)");
+            assert_eq!(rels.relations().next().unwrap().version(), None);
         }
 
         #[test]
