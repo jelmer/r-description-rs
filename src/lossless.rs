@@ -109,7 +109,41 @@ impl From<std::io::Error> for Error {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FieldError {
     field: &'static str,
-    message: String,
+    kind: FieldErrorKind,
+}
+
+/// What is wrong with the value of a field.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FieldErrorKind {
+    /// The value is not a valid list of relations.
+    Relations(relations::ParseError),
+
+    /// The value contains an invalid URL.
+    Url {
+        /// The invalid URL.
+        url: String,
+        /// Why it could not be parsed.
+        error: url::ParseError,
+    },
+
+    /// The value is not a valid logical (yes, no, true or false).
+    Logical(String),
+
+    /// The value is not a valid list of remotes.
+    Remotes(RemoteParseError),
+}
+
+impl std::fmt::Display for FieldErrorKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            Self::Relations(e) => e.fmt(f),
+            Self::Url { url, error } => write!(f, "{url:?}: {error}"),
+            Self::Logical(value) => {
+                write!(f, "expected yes, no, true or false, got {value:?}")
+            }
+            Self::Remotes(e) => e.fmt(f),
+        }
+    }
 }
 
 impl FieldError {
@@ -118,26 +152,35 @@ impl FieldError {
         self.field
     }
 
-    /// Description of what is wrong with the value.
-    pub fn message(&self) -> &str {
-        &self.message
+    /// What is wrong with the value.
+    pub fn kind(&self) -> &FieldErrorKind {
+        &self.kind
     }
 }
 
 impl std::fmt::Display for FieldError {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "invalid {} field: {}", self.field, self.message)
+        write!(f, "invalid {} field: {}", self.field, self.kind)
     }
 }
 
-impl std::error::Error for FieldError {}
+impl std::error::Error for FieldError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match &self.kind {
+            FieldErrorKind::Relations(e) => Some(e),
+            FieldErrorKind::Url { error, .. } => Some(error),
+            FieldErrorKind::Logical(_) => None,
+            FieldErrorKind::Remotes(e) => Some(e),
+        }
+    }
+}
 
 /// Parse a logical field value such as `LazyData`.
-fn parse_logical(value: &str) -> Result<bool, String> {
+fn parse_logical(value: &str) -> Result<bool, FieldErrorKind> {
     match value.to_ascii_lowercase().as_str() {
         "yes" | "true" => Ok(true),
         "no" | "false" => Ok(false),
-        _ => Err(format!("expected yes, no, true or false, got {value:?}")),
+        _ => Err(FieldErrorKind::Logical(value.to_string())),
     }
 }
 
@@ -206,11 +249,11 @@ impl RDescription {
     fn parse_field<T>(
         &self,
         field: &'static str,
-        parse: impl FnOnce(&str) -> Result<T, String>,
+        parse: impl FnOnce(&str) -> Result<T, FieldErrorKind>,
     ) -> Result<Option<T>, FieldError> {
         self.0
             .get(field)
-            .map(|value| parse(&value).map_err(|message| FieldError { field, message }))
+            .map(|value| parse(&value).map_err(|kind| FieldError { field, kind }))
             .transpose()
     }
 
@@ -332,7 +375,10 @@ impl RDescription {
     /// Return the bug reports URL
     pub fn bug_reports(&self) -> Result<Option<url::Url>, FieldError> {
         self.parse_field("BugReports", |s| {
-            url::Url::parse(s).map_err(|e| e.to_string())
+            url::Url::parse(s).map_err(|error| FieldErrorKind::Url {
+                url: s.to_string(),
+                error,
+            })
         })
     }
 
@@ -343,7 +389,7 @@ impl RDescription {
 
     /// Return the imports field
     pub fn imports(&self) -> Result<Option<Relations>, FieldError> {
-        self.parse_field("Imports", str::parse)
+        self.parse_field("Imports", |s| s.parse().map_err(FieldErrorKind::Relations))
     }
 
     /// Set the imports field
@@ -353,7 +399,7 @@ impl RDescription {
 
     /// Return the suggests field
     pub fn suggests(&self) -> Result<Option<Relations>, FieldError> {
-        self.parse_field("Suggests", str::parse)
+        self.parse_field("Suggests", |s| s.parse().map_err(FieldErrorKind::Relations))
     }
 
     /// Set the suggests field
@@ -363,7 +409,7 @@ impl RDescription {
 
     /// Return the depends field
     pub fn depends(&self) -> Result<Option<Relations>, FieldError> {
-        self.parse_field("Depends", str::parse)
+        self.parse_field("Depends", |s| s.parse().map_err(FieldErrorKind::Relations))
     }
 
     /// Set the depends field
@@ -373,7 +419,9 @@ impl RDescription {
 
     /// Return the linking-to field
     pub fn linking_to(&self) -> Result<Option<Relations>, FieldError> {
-        self.parse_field("LinkingTo", str::parse)
+        self.parse_field("LinkingTo", |s| {
+            s.parse().map_err(FieldErrorKind::Relations)
+        })
     }
 
     /// Set the linking-to field
@@ -383,7 +431,7 @@ impl RDescription {
 
     /// Return the enhances field
     pub fn enhances(&self) -> Result<Option<Relations>, FieldError> {
-        self.parse_field("Enhances", str::parse)
+        self.parse_field("Enhances", |s| s.parse().map_err(FieldErrorKind::Relations))
     }
 
     /// Set the enhances field
@@ -476,8 +524,10 @@ impl RDescription {
     }
 
     /// Return the Remotes field, listing non-CRAN sources for dependencies.
-    pub fn remotes(&self) -> Result<Option<Vec<Remote>>, RemoteParseError> {
-        self.0.get("Remotes").map(|s| parse_remotes(&s)).transpose()
+    pub fn remotes(&self) -> Result<Option<Vec<Remote>>, FieldError> {
+        self.parse_field("Remotes", |s| {
+            parse_remotes(s).map_err(FieldErrorKind::Remotes)
+        })
     }
 
     /// Set the Remotes field. An empty slice removes the field.
@@ -513,8 +563,8 @@ pub mod relations {
     //! assert_eq!(relations.to_string(), "cli (>= 0.19.0)");
     //! ```
     use crate::relations::SyntaxKind::{self, *};
-    use crate::relations::VersionConstraint;
-    use crate::version::Version as LossyVersion;
+    use crate::relations::{RelationParseError, VersionConstraint};
+    use crate::version::{Version as LossyVersion, VersionParseError};
     use rowan::{Direction, NodeOrToken};
     use std::cmp::Ordering;
     use std::hash::{Hash, Hasher};
@@ -544,23 +594,11 @@ pub mod relations {
     }
 
     impl std::str::FromStr for Version {
-        type Err = String;
+        type Err = VersionParseError;
 
         fn from_str(s: &str) -> Result<Self, Self::Err> {
-            let components = s
-                .split(|c| c == '.' || c == '-')
-                .map(|part| {
-                    part.parse()
-                        .map_err(|_| format!("Invalid version component: {s}"))
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-
-            if components.len() < 2 {
-                return Err(format!("Invalid version string: {s}"));
-            }
-
             Ok(Self {
-                components,
+                components: crate::version::parse_components(s)?,
                 original: s.to_string(),
             })
         }
@@ -622,18 +660,29 @@ pub mod relations {
 
     /// Error type for parsing relations fields
     #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-    pub struct ParseError(Vec<String>);
+    pub struct ParseError(Vec<RelationParseError>);
 
-    impl std::fmt::Display for ParseError {
-        fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-            for err in &self.0 {
-                writeln!(f, "{err}")?;
-            }
-            Ok(())
+    impl ParseError {
+        /// The errors that were encountered, in the order they occur in the input.
+        pub fn errors(&self) -> &[RelationParseError] {
+            &self.0
         }
     }
 
-    impl std::error::Error for ParseError {}
+    impl std::fmt::Display for ParseError {
+        fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            let messages: Vec<String> = self.0.iter().map(|e| e.to_string()).collect();
+            f.write_str(&messages.join("; "))
+        }
+    }
+
+    impl std::error::Error for ParseError {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            self.0
+                .first()
+                .map(|e| e as &(dyn std::error::Error + 'static))
+        }
+    }
 
     /// Second, implementing the `Language` trait teaches rowan to convert between
     /// these two SyntaxKind types, allowing for a nicer SyntaxNode API where
@@ -679,8 +728,7 @@ pub mod relations {
     /// We'll discuss working with the results later
     struct Parse {
         green_node: GreenNode,
-        #[allow(unused)]
-        errors: Vec<String>,
+        errors: Vec<RelationParseError>,
     }
 
     fn parse(text: &str) -> Parse {
@@ -692,11 +740,20 @@ pub mod relations {
             builder: GreenNodeBuilder<'static>,
             /// the list of syntax errors we've accumulated
             /// so far.
-            errors: Vec<String>,
+            errors: Vec<RelationParseError>,
         }
 
         impl Parser {
-            fn error(&mut self, error: String) {
+            /// Record an error for the current token, which is wrapped in an error node.
+            fn unexpected(&mut self) {
+                let error = match self.tokens.last() {
+                    Some((_, text)) => RelationParseError::UnexpectedToken(text.clone()),
+                    None => RelationParseError::MissingPackageName,
+                };
+                self.error(error);
+            }
+
+            fn error(&mut self, error: RelationParseError) {
                 self.errors.push(error);
                 self.builder.start_node(SyntaxKind::ERROR.into());
                 if self.current().is_some() {
@@ -710,18 +767,16 @@ pub mod relations {
                 if self.current() == Some(IDENT) {
                     self.bump();
                 } else {
-                    self.error("Expected package name".to_string());
+                    self.error(RelationParseError::MissingPackageName);
                 }
                 match self.peek_past_ws() {
                     Some(COMMA) => {}
                     None | Some(L_PARENS) => {
                         self.skip_ws();
                     }
-                    e => {
+                    _ => {
                         self.skip_ws();
-                        self.error(format!(
-                            "Expected ':' or '|' or '[' or '<' or ',' but got {e:?}"
-                        ));
+                        self.unexpected();
                     }
                 }
 
@@ -741,16 +796,16 @@ pub mod relations {
                     let operator_len = operator.len();
                     let operator = operator.concat();
                     if operator.is_empty() {
-                        self.errors.push("Expected version constraint".to_string());
+                        self.errors.push(RelationParseError::MissingConstraint);
                     } else {
                         // Invalid operators are kept in an error node so that
                         // Relation::version() does not see them.
-                        let kind = if operator.parse::<VersionConstraint>().is_ok() {
-                            CONSTRAINT
-                        } else {
-                            self.errors
-                                .push(format!("Invalid version constraint: {operator}"));
-                            ERROR
+                        let kind = match operator.parse::<VersionConstraint>() {
+                            Ok(_) => CONSTRAINT,
+                            Err(e) => {
+                                self.errors.push(RelationParseError::InvalidConstraint(e));
+                                ERROR
+                            }
                         };
                         self.builder.start_node(kind.into());
                         for _ in 0..operator_len {
@@ -764,18 +819,26 @@ pub mod relations {
                     match self.tokens.last() {
                         Some((IDENT, text)) => {
                             if let Err(e) = text.parse::<Version>() {
-                                self.error(e);
+                                self.error(RelationParseError::InvalidVersion(e));
                             } else {
                                 self.bump();
                             }
                         }
-                        _ => self.error("Expected version".to_string()),
+                        _ => self.error(RelationParseError::MissingVersion),
                     }
+
+                    self.skip_ws();
 
                     if self.current() == Some(R_PARENS) {
                         self.bump();
                     } else {
-                        self.error("Expected ')'".to_string());
+                        match self.current() {
+                            // Leave the comma so the next relation can still be parsed.
+                            None | Some(COMMA) => self
+                                .errors
+                                .push(RelationParseError::MissingClosingParenthesis),
+                            Some(_) => self.unexpected(),
+                        }
                     }
 
                     self.builder.finish_node();
@@ -795,12 +858,7 @@ pub mod relations {
                         Some(COMMA) => {
                             // Empty relation, but that's okay - probably?
                         }
-                        Some(c) => {
-                            self.error(format!("expected identifier or comma but got {c:?}"));
-                        }
-                        None => {
-                            self.error("expected identifier but got end of file".to_string());
-                        }
+                        _ => self.unexpected(),
                     }
 
                     self.skip_ws();
@@ -811,9 +869,7 @@ pub mod relations {
                         None => {
                             break;
                         }
-                        c => {
-                            self.error(format!("expected comma or end of file but got {c:?}"));
-                        }
+                        _ => self.unexpected(),
                     }
                     self.skip_ws();
                 }
@@ -1083,7 +1139,7 @@ pub mod relations {
         }
 
         /// Parse a relations field from a string, allowing syntax errors
-        pub fn parse_relaxed(s: &str) -> (Relations, Vec<String>) {
+        pub fn parse_relaxed(s: &str) -> (Relations, Vec<RelationParseError>) {
             let parse = parse(s);
             (parse.root_mut(), parse.errors)
         }
@@ -1531,20 +1587,20 @@ pub mod relations {
     }
 
     impl std::str::FromStr for Relations {
-        type Err = String;
+        type Err = ParseError;
 
         fn from_str(s: &str) -> Result<Self, Self::Err> {
             let parse = parse(s);
             if parse.errors.is_empty() {
                 Ok(parse.root_mut())
             } else {
-                Err(parse.errors.join("\n"))
+                Err(ParseError(parse.errors))
             }
         }
     }
 
     impl std::str::FromStr for Relation {
-        type Err = String;
+        type Err = ParseError;
 
         fn from_str(s: &str) -> Result<Self, Self::Err> {
             let rels = s.parse::<Relations>()?;
@@ -1553,11 +1609,11 @@ pub mod relations {
             let relation = if let Some(relation) = relations.next() {
                 relation
             } else {
-                return Err("No relation found".to_string());
+                return Err(ParseError(vec![RelationParseError::NoRelation]));
             };
 
             if relations.next().is_some() {
-                return Err("Multiple relations found".to_string());
+                return Err(ParseError(vec![RelationParseError::MultipleRelations]));
             }
 
             Ok(relation)
@@ -1770,9 +1826,9 @@ pub mod relations {
             assert_eq!(
                 errors,
                 vec![
-                    "expected identifier or comma but got ERROR",
-                    "expected comma or end of file but got Some(IDENT)",
-                    "expected identifier or comma but got ERROR"
+                    RelationParseError::UnexpectedToken("@".to_string()),
+                    RelationParseError::UnexpectedToken("foo".to_string()),
+                    RelationParseError::UnexpectedToken("@".to_string()),
                 ]
             );
             let relation = Relation::simple("bar");
@@ -1786,9 +1842,9 @@ pub mod relations {
             assert_eq!(
                 errors,
                 vec![
-                    "expected identifier or comma but got ERROR",
-                    "expected comma or end of file but got Some(IDENT)",
-                    "expected identifier or comma but got ERROR"
+                    RelationParseError::UnexpectedToken("@".to_string()),
+                    RelationParseError::UnexpectedToken("foo".to_string()),
+                    RelationParseError::UnexpectedToken("@".to_string()),
                 ]
             );
             let relation = Relation::simple("bar");
@@ -1798,12 +1854,15 @@ pub mod relations {
 
         #[test]
         fn test_invalid_constraint() {
+            let invalid = RelationParseError::InvalidConstraint(
+                crate::VersionConstraintParseError(">>=".to_string()),
+            );
             assert_eq!(
-                "foo (>>= 1.0)".parse::<Relations>().unwrap_err(),
-                "Invalid version constraint: >>="
+                "foo (>>= 1.0)".parse::<Relations>().unwrap_err().errors(),
+                std::slice::from_ref(&invalid)
             );
             let (rels, errors) = Relations::parse_relaxed("foo (>>= 1.0), bar (>= 2.0)");
-            assert_eq!(errors, vec!["Invalid version constraint: >>="]);
+            assert_eq!(errors, vec![invalid]);
             assert_eq!(rels.to_string(), "foo (>>= 1.0), bar (>= 2.0)");
             let versions: Vec<_> = rels.relations().map(|r| r.version()).collect();
             assert_eq!(
@@ -1816,10 +1875,34 @@ pub mod relations {
         }
 
         #[test]
+        fn test_whitespace_before_closing_parenthesis() {
+            let rels: Relations = "foo (>= 1.0 )".parse().unwrap();
+            assert_eq!(
+                rels.relations().next().unwrap().version(),
+                Some((VersionConstraint::GreaterThanEqual, "1.0".parse().unwrap()))
+            );
+        }
+
+        #[test]
+        fn test_missing_closing_parenthesis() {
+            assert_eq!(
+                "foo (>= 1.0".parse::<Relations>().unwrap_err().errors(),
+                [RelationParseError::MissingClosingParenthesis]
+            );
+            assert_eq!(
+                "foo (>= 1.0 bar)"
+                    .parse::<Relations>()
+                    .unwrap_err()
+                    .errors()[0],
+                RelationParseError::UnexpectedToken("bar".to_string())
+            );
+        }
+
+        #[test]
         fn test_missing_constraint() {
             assert_eq!(
-                "foo (1.0)".parse::<Relations>().unwrap_err(),
-                "Expected version constraint"
+                "foo (1.0)".parse::<Relations>().unwrap_err().errors(),
+                [RelationParseError::MissingConstraint]
             );
             let (rels, _) = Relations::parse_relaxed("foo (1.0)");
             assert_eq!(rels.relations().next().unwrap().version(), None);
@@ -1827,12 +1910,14 @@ pub mod relations {
 
         #[test]
         fn test_invalid_version() {
-            assert_eq!(
-                "foo (>= 1.0-beta)".parse::<Relations>().unwrap_err(),
-                "Invalid version component: 1.0-beta"
-            );
+            let invalid = RelationParseError::InvalidVersion(VersionParseError::InvalidComponent(
+                "beta".to_string(),
+            ));
+            let err = "foo (>= 1.0-beta)".parse::<Relations>().unwrap_err();
+            assert_eq!(err.errors(), std::slice::from_ref(&invalid));
+            assert_eq!(err.to_string(), "invalid version component \"beta\"");
             let (rels, errors) = Relations::parse_relaxed("foo (>= 1.0-beta)");
-            assert_eq!(errors, vec!["Invalid version component: 1.0-beta"]);
+            assert_eq!(errors, vec![invalid]);
             assert_eq!(rels.to_string(), "foo (>= 1.0-beta)");
             assert_eq!(rels.relations().next().unwrap().version(), None);
         }
@@ -1857,10 +1942,13 @@ pub mod relations {
                 ))
             );
             assert_eq!(
-                "foo, bar".parse::<Relation>().unwrap_err(),
-                "Multiple relations found"
+                "foo, bar".parse::<Relation>().unwrap_err().errors(),
+                [RelationParseError::MultipleRelations]
             );
-            assert_eq!("".parse::<Relation>().unwrap_err(), "No relation found");
+            assert_eq!(
+                "".parse::<Relation>().unwrap_err().errors(),
+                [RelationParseError::NoRelation]
+            );
         }
 
         #[test]
@@ -1984,6 +2072,7 @@ pub mod relations {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::RelationParseError;
 
     #[test]
     fn test_parse() {
@@ -2255,7 +2344,17 @@ Enhances: shiny
         let desc: RDescription = "Package: foo\nBugReports: not a url\n".parse().unwrap();
         let err = desc.bug_reports().unwrap_err();
         assert_eq!(err.field(), "BugReports");
-        assert_eq!(err.message(), "relative URL without a base");
+        assert_eq!(
+            err.kind(),
+            &FieldErrorKind::Url {
+                url: "not a url".to_string(),
+                error: url::ParseError::RelativeUrlWithoutBase,
+            }
+        );
+        assert_eq!(
+            err.to_string(),
+            "invalid BugReports field: \"not a url\": relative URL without a base"
+        );
     }
 
     #[test]
@@ -2263,6 +2362,10 @@ Enhances: shiny
         let desc: RDescription = "Package: foo\nImports: foo (>= 1.0, bar\n".parse().unwrap();
         let err = desc.imports().unwrap_err();
         assert_eq!(err.field(), "Imports");
+        let FieldErrorKind::Relations(e) = err.kind() else {
+            panic!("unexpected error kind: {:?}", err.kind());
+        };
+        assert_eq!(e.errors(), [RelationParseError::MissingClosingParenthesis]);
     }
 
     #[test]
@@ -2348,7 +2451,12 @@ License: MIT
         let desc: RDescription = "Package: mypackage\nRemotes: r-lib/httr,,r-lib/covr\n"
             .parse()
             .unwrap();
-        assert_eq!(desc.remotes(), Err(crate::remotes::RemoteParseError::Empty));
+        let err = desc.remotes().unwrap_err();
+        assert_eq!(err.field(), "Remotes");
+        assert_eq!(
+            err.kind(),
+            &FieldErrorKind::Remotes(crate::remotes::RemoteParseError::Empty)
+        );
     }
 
     #[test]

@@ -38,25 +38,58 @@ impl Version {
     }
 }
 
+/// Error parsing an R version string.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum VersionParseError {
+    /// The version has fewer than two components, e.g. `1`.
+    TooFewComponents(String),
+
+    /// A component is not a non-negative integer that fits in a `u32`.
+    InvalidComponent(String),
+}
+
+impl std::fmt::Display for VersionParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            Self::TooFewComponents(version) => {
+                write!(f, "version {version:?} has fewer than two components")
+            }
+            Self::InvalidComponent(component) => {
+                write!(f, "invalid version component {component:?}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for VersionParseError {}
+
+/// Split an R version string into its numeric components.
+///
+/// Both '.' and '-' are valid separators in R version strings and are equivalent,
+/// e.g. "2.5-1" == "2.5.1".
+pub(crate) fn parse_components(s: &str) -> Result<Vec<u32>, VersionParseError> {
+    let components = s
+        .split(['.', '-'])
+        .map(|part| {
+            part.parse()
+                .map_err(|_| VersionParseError::InvalidComponent(part.to_string()))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    if components.len() < 2 {
+        return Err(VersionParseError::TooFewComponents(s.to_string()));
+    }
+
+    Ok(components)
+}
+
 impl std::str::FromStr for Version {
-    type Err = String;
+    type Err = VersionParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        // Both '.' and '-' are valid separators in R version strings and are equivalent.
-        // e.g. "2.5-1" == "2.5.1"
-        let components = s
-            .split(|c| c == '.' || c == '-')
-            .map(|part| {
-                part.parse()
-                    .map_err(|_| format!("Invalid version component: {s}"))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-
-        if components.len() < 2 {
-            return Err(format!("Invalid version string: {s}"));
-        }
-
-        Ok(Self { components })
+        Ok(Self {
+            components: parse_components(s)?,
+        })
     }
 }
 
@@ -80,7 +113,7 @@ impl PartialOrd for Version {
 
 #[cfg(test)]
 mod tests {
-    use super::Version;
+    use super::{Version, VersionParseError};
     use std::str::FromStr;
 
     #[test]
@@ -140,5 +173,21 @@ mod tests {
         assert!(Version::from_str("1.a.3").is_err());
         // Single component is not a valid R package version
         assert!(Version::from_str("1").is_err());
+    }
+
+    #[test]
+    fn test_parse_errors() {
+        assert_eq!(
+            Version::from_str("1.a.3"),
+            Err(VersionParseError::InvalidComponent("a".to_string()))
+        );
+        assert_eq!(
+            Version::from_str("1..3"),
+            Err(VersionParseError::InvalidComponent("".to_string()))
+        );
+        assert_eq!(
+            Version::from_str("1"),
+            Err(VersionParseError::TooFewComponents("1".to_string()))
+        );
     }
 }

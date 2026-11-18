@@ -1,5 +1,5 @@
 //! Parsing of R DESCRIPTION relations strings.
-use crate::version::Version;
+use crate::version::{Version, VersionParseError};
 use std::borrow::Cow;
 use std::iter::Peekable;
 use std::str::Chars;
@@ -24,8 +24,20 @@ pub enum VersionConstraint {
     GreaterThanEqual,
 }
 
+/// Error parsing a version constraint operator.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct VersionConstraintParseError(pub String);
+
+impl std::fmt::Display for VersionConstraintParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "invalid version constraint {:?}", self.0)
+    }
+}
+
+impl std::error::Error for VersionConstraintParseError {}
+
 impl std::str::FromStr for VersionConstraint {
-    type Err = String;
+    type Err = VersionConstraintParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
@@ -35,7 +47,7 @@ impl std::str::FromStr for VersionConstraint {
             "!=" => Ok(VersionConstraint::NotEqual),
             ">" => Ok(VersionConstraint::GreaterThan),
             "<" => Ok(VersionConstraint::LessThan),
-            _ => Err(format!("Invalid version constraint: {s}")),
+            _ => Err(VersionConstraintParseError(s.to_string())),
         }
     }
 }
@@ -49,6 +61,63 @@ impl std::fmt::Display for VersionConstraint {
             VersionConstraint::NotEqual => f.write_str("!="),
             VersionConstraint::GreaterThan => f.write_str(">"),
             VersionConstraint::LessThan => f.write_str("<"),
+        }
+    }
+}
+
+/// Error parsing a relation such as `cli (>= 2.0)`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum RelationParseError {
+    /// A relation does not start with a package name.
+    MissingPackageName,
+
+    /// A version requirement has no comparison operator, e.g. `foo (1.0)`.
+    MissingConstraint,
+
+    /// A version requirement has an unknown comparison operator.
+    InvalidConstraint(VersionConstraintParseError),
+
+    /// A version requirement has no version.
+    MissingVersion,
+
+    /// The version in a version requirement is invalid.
+    InvalidVersion(VersionParseError),
+
+    /// A version requirement is missing its closing parenthesis.
+    MissingClosingParenthesis,
+
+    /// Unexpected text was found, e.g. a package name without a separating comma.
+    UnexpectedToken(String),
+
+    /// A single relation was expected, but none was found.
+    NoRelation,
+
+    /// A single relation was expected, but more than one was found.
+    MultipleRelations,
+}
+
+impl std::fmt::Display for RelationParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            Self::MissingPackageName => f.write_str("expected package name"),
+            Self::MissingConstraint => f.write_str("expected version constraint"),
+            Self::InvalidConstraint(e) => e.fmt(f),
+            Self::MissingVersion => f.write_str("expected version"),
+            Self::InvalidVersion(e) => e.fmt(f),
+            Self::MissingClosingParenthesis => f.write_str("expected ')'"),
+            Self::UnexpectedToken(token) => write!(f, "unexpected {token:?}"),
+            Self::NoRelation => f.write_str("no relation found"),
+            Self::MultipleRelations => f.write_str("multiple relations found"),
+        }
+    }
+}
+
+impl std::error::Error for RelationParseError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::InvalidConstraint(e) => Some(e),
+            Self::InvalidVersion(e) => Some(e),
+            _ => None,
         }
     }
 }
