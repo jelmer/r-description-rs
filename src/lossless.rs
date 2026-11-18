@@ -5,20 +5,51 @@
 //! original formatting of the file.
 //!
 //! This parser also allows for syntax errors in the input, and will attempt to parse as much as
-//! possible.
+//! possible. Parsing with `FromStr` fails on syntax errors, while
+//! [`RDescription::from_str_relaxed`] returns whatever could be recovered together with the
+//! errors and their byte ranges in the input:
+//!
+//! ```rust
+//! use r_description::lossless::RDescription;
+//!
+//! let text = "Package foo\nVersion: 1.0\n";
+//! let (desc, errors) = RDescription::from_str_relaxed(text);
+//!
+//! assert_eq!(desc.version(), Some("1.0".to_string()));
+//! assert_eq!(errors[0].message, "missing colon ':' after field name");
+//! assert_eq!(&text[errors[0].range], "foo");
+//!
+//! // The original text is kept as-is.
+//! assert_eq!(desc.to_string(), text);
+//! ```
+//!
+//! [`RDescription::field_range`] and [`RDescription::value_range`] return the position of a
+//! field in the file, which can be used to point at invalid values.
 //!
 //! See https://r-pkgs.org/description.html for more information.
 
 use crate::RCode;
-use deb822_lossless::Paragraph;
+use deb822_lossless::{Deb822, Paragraph};
+pub use deb822_lossless::{PositionedParseError, TextRange};
 pub use relations::{Relation, Relations, Version};
+use rowan::ast::AstNode;
 
 /// R DESCRIPTION file
+///
+/// The fields live in the first paragraph of the parsed file; anything around it, such as
+/// comments, is kept so that the file round-trips unchanged.
+#[derive(Debug)]
 pub struct RDescription(Paragraph);
 
 impl std::fmt::Display for RDescription {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{}", self.0)
+        let root = self
+            .0
+            .syntax()
+            .ancestors()
+            .last()
+            .expect("ancestors() always includes the node itself");
+        write!(f, "{}", root.text())
     }
 }
 
@@ -76,12 +107,59 @@ impl From<std::io::Error> for Error {
 impl std::str::FromStr for RDescription {
     type Err = Error;
 
+    /// Parse a DESCRIPTION file, failing on any syntax error.
+    ///
+    /// Use [`RDescription::from_str_relaxed`] to get the recovered file along with the
+    /// positions of the errors.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(Self(Paragraph::from_str(s)?))
+        let (desc, errors) = Self::from_str_relaxed(s);
+        if errors.is_empty() {
+            Ok(desc)
+        } else {
+            Err(Error::Parse(deb822_lossless::ParseError(
+                errors.into_iter().map(|e| e.message).collect(),
+            )))
+        }
     }
 }
 
 impl RDescription {
+    /// Parse a DESCRIPTION file, recovering from syntax errors.
+    ///
+    /// This always returns a description holding as much as could be parsed, along with any
+    /// errors that were encountered. Error ranges are byte offsets into `s`. The file is
+    /// preserved as-is, so `to_string()` returns `s` until it is modified.
+    pub fn from_str_relaxed(s: &str) -> (Self, Vec<PositionedParseError>) {
+        let parsed = Deb822::parse(s);
+        let mut errors = parsed.positioned_errors().to_vec();
+        let mut deb822 = parsed.tree();
+        let mut paragraphs = deb822.paragraphs();
+        let paragraph = paragraphs.next();
+        errors.extend(paragraphs.map(|p| PositionedParseError {
+            message: "unexpected additional paragraph".to_string(),
+            range: p.text_range(),
+            code: Some("multiple-paragraphs".to_string()),
+        }));
+        let paragraph = paragraph.unwrap_or_else(|| deb822.add_paragraph());
+        (Self(paragraph), errors)
+    }
+
+    /// Return the byte range of the entry for `field`, including its name.
+    ///
+    /// Ranges are relative to the current rendering of the file, so they need to be
+    /// obtained again after the file is modified.
+    pub fn field_range(&self, field: &str) -> Option<TextRange> {
+        self.0.get_entry(field).map(|entry| entry.text_range())
+    }
+
+    /// Return the byte range of the value of `field`.
+    ///
+    /// Ranges are relative to the current rendering of the file, so they need to be
+    /// obtained again after the file is modified.
+    pub fn value_range(&self, field: &str) -> Option<TextRange> {
+        self.0.get_entry(field)?.value_range()
+    }
+
     /// Create a new empty R DESCRIPTION file
     pub fn new() -> Self {
         Self(Paragraph::new())
@@ -1924,6 +2002,71 @@ Enhances: shiny
             desc.enhances().unwrap().iter().next().unwrap().name(),
             "shiny"
         );
+    }
+
+    #[test]
+    fn test_preserves_comments() {
+        let s = "# comment\nPackage: foo\n";
+        let mut desc: RDescription = s.parse().unwrap();
+        assert_eq!(desc.to_string(), s);
+        desc.set_title("Foo");
+        assert_eq!(desc.to_string(), "# comment\nPackage: foo\nTitle: Foo\n");
+    }
+
+    #[test]
+    fn test_empty() {
+        let mut desc: RDescription = "".parse().unwrap();
+        assert_eq!(desc.package(), None);
+        assert_eq!(desc.to_string(), "");
+        desc.set_package("foo");
+        assert_eq!(desc.to_string(), "Package: foo\n");
+    }
+
+    #[test]
+    fn test_multiple_paragraphs() {
+        let s = "Package: a\n\nPackage: b\n";
+        assert!(matches!(s.parse::<RDescription>(), Err(Error::Parse(_))));
+
+        let (desc, errors) = RDescription::from_str_relaxed(s);
+        assert_eq!(desc.package(), Some("a".to_string()));
+        assert_eq!(desc.to_string(), s);
+        assert_eq!(
+            errors,
+            vec![PositionedParseError {
+                message: "unexpected additional paragraph".to_string(),
+                range: TextRange::new(12.into(), 23.into()),
+                code: Some("multiple-paragraphs".to_string()),
+            }]
+        );
+    }
+
+    #[test]
+    fn test_from_str_relaxed() {
+        let s = "Package foo\nVersion: 1.0\nTitle: Foo\n";
+        let err = s.parse::<RDescription>().unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Parse error: missing colon ':' after field name\n"
+        );
+
+        let (desc, errors) = RDescription::from_str_relaxed(s);
+        assert_eq!(desc.version(), Some("1.0".to_string()));
+        assert_eq!(desc.title(), Some("Foo".to_string()));
+        assert_eq!(desc.to_string(), s);
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].message, "missing colon ':' after field name");
+        assert_eq!(&s[errors[0].range], "foo");
+    }
+
+    #[test]
+    fn test_ranges() {
+        let s = "# comment\nPackage: foo\nImports:\n    cli,\n    glue\n";
+        let desc: RDescription = s.parse().unwrap();
+        assert_eq!(&s[desc.field_range("Package").unwrap()], "Package: foo\n");
+        assert_eq!(&s[desc.value_range("Package").unwrap()], "foo");
+        assert_eq!(&s[desc.value_range("Imports").unwrap()], "cli,\n    glue");
+        assert_eq!(desc.field_range("Title"), None);
+        assert_eq!(desc.value_range("Title"), None);
     }
 
     #[test]
