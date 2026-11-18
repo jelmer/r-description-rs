@@ -15,7 +15,7 @@
 //! let text = "Package foo\nVersion: 1.0\n";
 //! let (desc, errors) = RDescription::from_str_relaxed(text);
 //!
-//! assert_eq!(desc.version(), Some("1.0".to_string()));
+//! assert_eq!(desc.version().unwrap().unwrap().as_str(), "1.0");
 //! assert_eq!(errors[0].message, "missing colon ':' after field name");
 //! assert_eq!(&text[errors[0].range], "foo");
 //!
@@ -132,6 +132,9 @@ pub enum FieldErrorKind {
 
     /// The value is not a valid list of remotes.
     Remotes(RemoteParseError),
+
+    /// The value is not a valid version.
+    Version(crate::VersionParseError),
 }
 
 impl FieldErrorKind {
@@ -141,7 +144,7 @@ impl FieldErrorKind {
         match self {
             Self::Relations(e) => e.errors().first().map(|e| e.range),
             // TODO: report the position of the invalid remote
-            Self::Url { .. } | Self::Logical(_) | Self::Remotes(_) => None,
+            Self::Url { .. } | Self::Logical(_) | Self::Remotes(_) | Self::Version(_) => None,
         }
     }
 }
@@ -155,6 +158,7 @@ impl std::fmt::Display for FieldErrorKind {
                 write!(f, "expected yes, no, true or false, got {value:?}")
             }
             Self::Remotes(e) => e.fmt(f),
+            Self::Version(e) => e.fmt(f),
         }
     }
 }
@@ -193,6 +197,7 @@ impl std::error::Error for FieldError {
             FieldErrorKind::Url { error, .. } => Some(error),
             FieldErrorKind::Logical(_) => None,
             FieldErrorKind::Remotes(e) => Some(e),
+            FieldErrorKind::Version(e) => Some(e),
         }
     }
 }
@@ -379,13 +384,13 @@ impl RDescription {
     }
 
     /// Return the version of the package
-    pub fn version(&self) -> Option<String> {
-        self.0.get("Version")
+    pub fn version(&self) -> Result<Option<Version>, FieldError> {
+        self.parse_field("Version", |s| s.parse().map_err(FieldErrorKind::Version))
     }
 
     /// Set the version of the package
-    pub fn set_version(&mut self, version: &str) {
-        self.0.set("Version", version);
+    pub fn set_version(&mut self, version: &Version) {
+        self.0.set("Version", version.as_str());
     }
 
     /// Return the encoding of the description file
@@ -877,99 +882,8 @@ pub mod relations {
     //! ```
     use crate::relations::SyntaxKind::{self, *};
     use crate::relations::{RelationParseError, VersionConstraint};
-    use crate::version::{Version as LossyVersion, VersionParseError};
+    pub use crate::version::Version;
     use rowan::{Direction, NodeOrToken, TextRange, TextSize};
-    use std::cmp::Ordering;
-    use std::hash::{Hash, Hasher};
-
-    #[derive(Debug, Clone)]
-    /// Represents an R version string while preserving its original separators.
-    ///
-    /// R treats `.` and `-` as equivalent separators for comparison, but callers may
-    /// need to round-trip the exact spelling from DESCRIPTION relationship fields.
-    pub struct Version {
-        /// Version components like [1, 2, 3]
-        pub components: Vec<u32>,
-        original: String,
-    }
-
-    impl Version {
-        /// Return the original version string.
-        pub fn as_str(&self) -> &str {
-            &self.original
-        }
-    }
-
-    impl std::fmt::Display for Version {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            f.write_str(&self.original)
-        }
-    }
-
-    impl std::str::FromStr for Version {
-        type Err = VersionParseError;
-
-        fn from_str(s: &str) -> Result<Self, Self::Err> {
-            Ok(Self {
-                components: crate::version::parse_components(s)?,
-                original: s.to_string(),
-            })
-        }
-    }
-
-    impl From<Version> for LossyVersion {
-        fn from(version: Version) -> Self {
-            Self {
-                components: version.components,
-            }
-        }
-    }
-
-    impl From<LossyVersion> for Version {
-        fn from(version: LossyVersion) -> Self {
-            let original = version.to_string();
-            Self {
-                components: version.components,
-                original,
-            }
-        }
-    }
-
-    impl PartialEq for Version {
-        fn eq(&self, other: &Self) -> bool {
-            self.components == other.components
-        }
-    }
-
-    impl Eq for Version {}
-
-    impl Hash for Version {
-        fn hash<H: Hasher>(&self, state: &mut H) {
-            self.components.hash(state);
-        }
-    }
-
-    impl Ord for Version {
-        fn cmp(&self, other: &Self) -> Ordering {
-            compare_components(&self.components, &other.components)
-        }
-    }
-
-    impl PartialOrd for Version {
-        fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-            Some(self.cmp(other))
-        }
-    }
-
-    fn compare_components(a_components: &[u32], b_components: &[u32]) -> Ordering {
-        for (a, b) in a_components.iter().zip(b_components.iter()) {
-            match a.cmp(b) {
-                Ordering::Equal => continue,
-                ordering => return ordering,
-            }
-        }
-        a_components.len().cmp(&b_components.len())
-    }
 
     /// A relation parse error, with the byte range in the input where it occurred.
     #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -1548,9 +1462,7 @@ pub mod relations {
         fn from(relation: Relation) -> Self {
             let mut rel = crate::lossy::Relation::new();
             rel.name = relation.name();
-            rel.version = relation
-                .version()
-                .map(|(constraint, version)| (constraint, version.into()));
+            rel.version = relation.version();
             rel
         }
     }
@@ -1577,12 +1489,7 @@ pub mod relations {
 
     impl From<crate::lossy::Relation> for Relation {
         fn from(relation: crate::lossy::Relation) -> Self {
-            Relation::new(
-                &relation.name,
-                relation
-                    .version
-                    .map(|(constraint, version)| (constraint, version.into())),
-            )
+            Relation::new(&relation.name, relation.version)
         }
     }
 
@@ -1891,7 +1798,7 @@ pub mod relations {
             let version = self.version();
             if let Some(version) = version {
                 if let Some(package_version) = package_version.lookup_version(&name) {
-                    let required: LossyVersion = version.1.into();
+                    let required = version.1;
                     let actual = package_version.into_owned();
                     match version.0 {
                         VersionConstraint::GreaterThanEqual => actual >= required,
@@ -1988,6 +1895,7 @@ pub mod relations {
     #[cfg(test)]
     mod tests {
         use super::*;
+        use crate::version::VersionParseError;
 
         /// Pair each error with the text it points at.
         fn located<'a>(
@@ -2381,7 +2289,7 @@ pub mod relations {
         #[test]
         fn test_relations_satisfied_by() {
             let rels: Relations = "cli (>= 0.20.21), cli (< 0.21)".parse().unwrap();
-            let satisfied = |name: &str| -> Option<LossyVersion> {
+            let satisfied = |name: &str| -> Option<Version> {
                 match name {
                     "cli" => Some("0.20.21".parse().unwrap()),
                     _ => None,
@@ -2513,7 +2421,7 @@ RoxygenNote: 7.3.2
             desc.title(),
             Some("What the Package Does (One Line, Title Case)".to_string())
         );
-        assert_eq!(desc.version(), Some("0.0.0.9000".to_string()));
+        assert_eq!(desc.version().unwrap().unwrap().as_str(), "0.0.0.9000");
         assert_eq!(
             desc.authors(),
             Some(RCode(
@@ -2550,10 +2458,10 @@ Encoding: UTF-8
 "###;
         let mut desc: RDescription = s.parse().unwrap();
 
-        desc.set_version("0.0.1");
+        desc.set_version(&"0.0.1".parse().unwrap());
 
         // the field is updated in place rather than appended a second time
-        assert_eq!(desc.version(), Some("0.0.1".to_string()));
+        assert_eq!(desc.version().unwrap().unwrap().as_str(), "0.0.1");
         assert_eq!(desc.to_string().matches("Version:").count(), 1);
 
         assert_eq!(
@@ -2572,9 +2480,9 @@ Encoding: UTF-8
         let s = "Package: mypackage\n";
         let mut desc: RDescription = s.parse().unwrap();
 
-        desc.set_version("0.0.1");
+        desc.set_version(&"0.0.1".parse().unwrap());
 
-        assert_eq!(desc.version(), Some("0.0.1".to_string()));
+        assert_eq!(desc.version().unwrap().unwrap().as_str(), "0.0.1");
         assert_eq!(desc.to_string(), "Package: mypackage\nVersion: 0.0.1\n");
     }
 
@@ -2694,7 +2602,7 @@ Enhances: shiny
         );
 
         let (desc, errors) = RDescription::from_str_relaxed(s);
-        assert_eq!(desc.version(), Some("1.0".to_string()));
+        assert_eq!(desc.version().unwrap().unwrap().as_str(), "1.0");
         assert_eq!(desc.title(), Some("Foo".to_string()));
         assert_eq!(desc.to_string(), s);
         assert_eq!(errors.len(), 1);
@@ -2711,6 +2619,35 @@ Enhances: shiny
         assert_eq!(&s[desc.value_range("Imports").unwrap()], "cli,\n    glue");
         assert_eq!(desc.field_range("Title"), None);
         assert_eq!(desc.value_range("Title"), None);
+    }
+
+    #[test]
+    fn test_version() {
+        let s = "Package: foo\nVersion: 2.5-1\n";
+        let mut desc: RDescription = s.parse().unwrap();
+        let version = desc.version().unwrap().unwrap();
+        assert_eq!(version, "2.5.1".parse().unwrap());
+        assert_eq!(version.as_str(), "2.5-1");
+        assert_eq!(desc.to_string(), s);
+
+        desc.set_version(&"2.6-0".parse().unwrap());
+        assert_eq!(desc.to_string(), "Package: foo\nVersion: 2.6-0\n");
+
+        let desc: RDescription = "Package: foo\n".parse().unwrap();
+        assert_eq!(desc.version(), Ok(None));
+    }
+
+    #[test]
+    fn test_version_invalid() {
+        let desc: RDescription = "Package: foo\nVersion: 1.0-beta\n".parse().unwrap();
+        let err = desc.version().unwrap_err();
+        assert_eq!(err.field(), "Version");
+        assert_eq!(
+            err.kind(),
+            &FieldErrorKind::Version(crate::VersionParseError::InvalidComponent(
+                "beta".to_string()
+            ))
+        );
     }
 
     #[test]

@@ -1,40 +1,67 @@
 //! R Version strings
 use std::cmp::Ordering;
+use std::hash::{Hash, Hasher};
 
-#[derive(Debug, PartialEq, Eq, std::hash::Hash, Clone)]
+#[derive(Debug, Clone)]
 /// Represents an R version string like "1.2.3" or "2.5-1".
 ///
 /// R version strings consist of non-negative integers separated by `.` or `-`.
-/// Both separators are equivalent: `2.5-1` and `2.5.1` represent the same version.
+/// Both separators are equivalent: `2.5-1` and `2.5.1` represent the same version,
+/// and compare equal. The original spelling is kept, so that it can be written back
+/// unchanged; this means two `Version`s may be equal while displaying differently.
 /// There is no concept of pre-release versions in R's versioning scheme.
 pub struct Version {
-    /// Version components like [1, 2, 3]
-    pub components: Vec<u32>,
+    components: Vec<u32>,
+    original: String,
 }
 
 impl std::fmt::Display for Version {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(
-            &self
-                .components
-                .iter()
-                .map(|c| c.to_string())
-                .collect::<Vec<_>>()
-                .join("."),
-        )
+        f.write_str(&self.original)
     }
 }
 
 impl Version {
     /// Create a new version
     pub fn new(major: u32, minor: u32, patch: Option<u32>) -> Self {
+        let components = if let Some(patch) = patch {
+            vec![major, minor, patch]
+        } else {
+            vec![major, minor]
+        };
+        let original = components
+            .iter()
+            .map(|c| c.to_string())
+            .collect::<Vec<_>>()
+            .join(".");
         Self {
-            components: if let Some(patch) = patch {
-                vec![major, minor, patch]
-            } else {
-                vec![major, minor]
-            },
+            components,
+            original,
         }
+    }
+
+    /// Version components like [1, 2, 3]
+    pub fn components(&self) -> &[u32] {
+        &self.components
+    }
+
+    /// Return the version as it was written.
+    pub fn as_str(&self) -> &str {
+        &self.original
+    }
+}
+
+impl PartialEq for Version {
+    fn eq(&self, other: &Self) -> bool {
+        self.components == other.components
+    }
+}
+
+impl Eq for Version {}
+
+impl Hash for Version {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.components.hash(state);
     }
 }
 
@@ -89,6 +116,7 @@ impl std::str::FromStr for Version {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(Self {
             components: parse_components(s)?,
+            original: s.to_string(),
         })
     }
 }
@@ -123,11 +151,11 @@ mod tests {
 
         // '-' and '.' are equivalent separators in R
         let version = Version::from_str("2.5-1").unwrap();
-        assert_eq!(version.components, vec![2, 5, 1]);
+        assert_eq!(version.components(), [2, 5, 1]);
 
         // Development versions use a 4th numeric component
         let version = Version::from_str("1.2.3.9000").unwrap();
-        assert_eq!(version.components, vec![1, 2, 3, 9000]);
+        assert_eq!(version.components(), [1, 2, 3, 9000]);
     }
 
     #[test]
@@ -159,12 +187,15 @@ mod tests {
 
     #[test]
     fn test_version_display() {
-        // Display normalizes to '.' separator
+        // Display keeps the original separators
         let version = Version::from_str("1.2.3").unwrap();
         assert_eq!(version.to_string(), "1.2.3");
 
         let version = Version::from_str("2.5-1").unwrap();
-        assert_eq!(version.to_string(), "2.5.1");
+        assert_eq!(version.to_string(), "2.5-1");
+        assert_eq!(version.as_str(), "2.5-1");
+
+        assert_eq!(Version::new(1, 2, None).to_string(), "1.2");
     }
 
     #[test]
