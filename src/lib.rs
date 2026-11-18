@@ -12,6 +12,12 @@ pub use lossy::RDescription;
 mod version;
 pub use version::Version;
 
+pub mod remotes;
+pub use remotes::{
+    BiocCredentials, BiocRepository, GitReference, GitRepository, HostedRepository, Remote,
+    RemoteParseError, RemoteSource,
+};
+
 #[derive(Debug, PartialEq, Eq)]
 /// A block of R code
 ///
