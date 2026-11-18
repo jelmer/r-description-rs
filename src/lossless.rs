@@ -104,6 +104,42 @@ impl From<std::io::Error> for Error {
     }
 }
 
+/// Error returned when a field is present but its value is invalid.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FieldError {
+    field: &'static str,
+    message: String,
+}
+
+impl FieldError {
+    /// Name of the field with the invalid value.
+    pub fn field(&self) -> &str {
+        self.field
+    }
+
+    /// Description of what is wrong with the value.
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+}
+
+impl std::fmt::Display for FieldError {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "invalid {} field: {}", self.field, self.message)
+    }
+}
+
+impl std::error::Error for FieldError {}
+
+/// Parse a logical field value such as `LazyData`.
+fn parse_logical(value: &str) -> Result<bool, String> {
+    match value.to_ascii_lowercase().as_str() {
+        "yes" | "true" => Ok(true),
+        "no" | "false" => Ok(false),
+        _ => Err(format!("expected yes, no, true or false, got {value:?}")),
+    }
+}
+
 impl std::str::FromStr for RDescription {
     type Err = Error;
 
@@ -163,6 +199,18 @@ impl RDescription {
     /// Create a new empty R DESCRIPTION file
     pub fn new() -> Self {
         Self(Paragraph::new())
+    }
+
+    /// Parse the value of `field` if it is present.
+    fn parse_field<T>(
+        &self,
+        field: &'static str,
+        parse: impl FnOnce(&str) -> Result<T, String>,
+    ) -> Result<Option<T>, FieldError> {
+        self.0
+            .get(field)
+            .map(|value| parse(&value).map_err(|message| FieldError { field, message }))
+            .transpose()
     }
 
     /// Return the package name
@@ -281,10 +329,10 @@ impl RDescription {
     }
 
     /// Return the bug reports URL
-    pub fn bug_reports(&self) -> Option<url::Url> {
-        self.0
-            .get("BugReports")
-            .map(|s| url::Url::parse(s.as_str()).unwrap())
+    pub fn bug_reports(&self) -> Result<Option<url::Url>, FieldError> {
+        self.parse_field("BugReports", |s| {
+            url::Url::parse(s).map_err(|e| e.to_string())
+        })
     }
 
     /// Set the bug reports URL
@@ -293,8 +341,8 @@ impl RDescription {
     }
 
     /// Return the imports field
-    pub fn imports(&self) -> Option<Relations> {
-        self.0.get("Imports").map(|s| s.parse().unwrap())
+    pub fn imports(&self) -> Result<Option<Relations>, FieldError> {
+        self.parse_field("Imports", str::parse)
     }
 
     /// Set the imports field
@@ -303,8 +351,8 @@ impl RDescription {
     }
 
     /// Return the suggests field
-    pub fn suggests(&self) -> Option<Relations> {
-        self.0.get("Suggests").map(|s| s.parse().unwrap())
+    pub fn suggests(&self) -> Result<Option<Relations>, FieldError> {
+        self.parse_field("Suggests", str::parse)
     }
 
     /// Set the suggests field
@@ -313,8 +361,8 @@ impl RDescription {
     }
 
     /// Return the depends field
-    pub fn depends(&self) -> Option<Relations> {
-        self.0.get("Depends").map(|s| s.parse().unwrap())
+    pub fn depends(&self) -> Result<Option<Relations>, FieldError> {
+        self.parse_field("Depends", str::parse)
     }
 
     /// Set the depends field
@@ -323,8 +371,8 @@ impl RDescription {
     }
 
     /// Return the linking-to field
-    pub fn linking_to(&self) -> Option<Relations> {
-        self.0.get("LinkingTo").map(|s| s.parse().unwrap())
+    pub fn linking_to(&self) -> Result<Option<Relations>, FieldError> {
+        self.parse_field("LinkingTo", str::parse)
     }
 
     /// Set the linking-to field
@@ -333,8 +381,8 @@ impl RDescription {
     }
 
     /// Return the enhances field
-    pub fn enhances(&self) -> Option<Relations> {
-        self.0.get("Enhances").map(|s| s.parse().unwrap())
+    pub fn enhances(&self) -> Result<Option<Relations>, FieldError> {
+        self.parse_field("Enhances", str::parse)
     }
 
     /// Set the enhances field
@@ -343,8 +391,8 @@ impl RDescription {
     }
 
     /// Return the lazy data field
-    pub fn lazy_data(&self) -> Option<bool> {
-        self.0.get("LazyData").map(|s| s == "true")
+    pub fn lazy_data(&self) -> Result<Option<bool>, FieldError> {
+        self.parse_field("LazyData", parse_logical)
     }
 
     /// Set the lazy data field
@@ -1971,7 +2019,7 @@ Enhances: shiny
 "###;
         let desc: RDescription = s.parse().unwrap();
 
-        let imports = desc.imports().unwrap();
+        let imports = desc.imports().unwrap().unwrap();
         assert_eq!(imports.len(), 2);
         assert_eq!(
             imports
@@ -1984,10 +2032,11 @@ Enhances: shiny
                 .to_string(),
             "2.5-1"
         );
-        assert_eq!(desc.suggests().unwrap().len(), 1);
-        assert_eq!(desc.depends().unwrap().len(), 1);
+        assert_eq!(desc.suggests().unwrap().unwrap().len(), 1);
+        assert_eq!(desc.depends().unwrap().unwrap().len(), 1);
         assert_eq!(
             desc.linking_to()
+                .unwrap()
                 .unwrap()
                 .iter()
                 .next()
@@ -1999,7 +2048,13 @@ Enhances: shiny
             "0.4-1"
         );
         assert_eq!(
-            desc.enhances().unwrap().iter().next().unwrap().name(),
+            desc.enhances()
+                .unwrap()
+                .unwrap()
+                .iter()
+                .next()
+                .unwrap()
+                .name(),
             "shiny"
         );
     }
@@ -2067,6 +2122,67 @@ Enhances: shiny
         assert_eq!(&s[desc.value_range("Imports").unwrap()], "cli,\n    glue");
         assert_eq!(desc.field_range("Title"), None);
         assert_eq!(desc.value_range("Title"), None);
+    }
+
+    #[test]
+    fn test_lazy_data() {
+        for (value, expected) in [
+            ("true", true),
+            ("TRUE", true),
+            ("yes", true),
+            ("Yes", true),
+            ("false", false),
+            ("no", false),
+            ("NO", false),
+        ] {
+            let desc: RDescription = format!("Package: foo\nLazyData: {value}\n")
+                .parse()
+                .unwrap();
+            assert_eq!(desc.lazy_data(), Ok(Some(expected)), "{value}");
+        }
+
+        let desc: RDescription = "Package: foo\n".parse().unwrap();
+        assert_eq!(desc.lazy_data(), Ok(None));
+    }
+
+    #[test]
+    fn test_lazy_data_invalid() {
+        let desc: RDescription = "Package: foo\nLazyData: maybe\n".parse().unwrap();
+        let err = desc.lazy_data().unwrap_err();
+        assert_eq!(err.field(), "LazyData");
+        assert_eq!(
+            err.to_string(),
+            "invalid LazyData field: expected yes, no, true or false, got \"maybe\""
+        );
+    }
+
+    #[test]
+    fn test_bug_reports() {
+        let desc: RDescription = "Package: foo\nBugReports: https://example.com/issues\n"
+            .parse()
+            .unwrap();
+        assert_eq!(
+            desc.bug_reports(),
+            Ok(Some("https://example.com/issues".parse().unwrap()))
+        );
+
+        let desc: RDescription = "Package: foo\n".parse().unwrap();
+        assert_eq!(desc.bug_reports(), Ok(None));
+    }
+
+    #[test]
+    fn test_bug_reports_invalid() {
+        let desc: RDescription = "Package: foo\nBugReports: not a url\n".parse().unwrap();
+        let err = desc.bug_reports().unwrap_err();
+        assert_eq!(err.field(), "BugReports");
+        assert_eq!(err.message(), "relative URL without a base");
+    }
+
+    #[test]
+    fn test_relations_invalid() {
+        let desc: RDescription = "Package: foo\nImports: foo (>= 1.0, bar\n".parse().unwrap();
+        let err = desc.imports().unwrap_err();
+        assert_eq!(err.field(), "Imports");
     }
 
     #[test]
