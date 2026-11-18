@@ -110,6 +110,7 @@ impl From<std::io::Error> for Error {
 pub struct FieldError {
     field: &'static str,
     kind: FieldErrorKind,
+    range: TextRange,
 }
 
 /// What is wrong with the value of a field.
@@ -131,6 +132,18 @@ pub enum FieldErrorKind {
 
     /// The value is not a valid list of remotes.
     Remotes(RemoteParseError),
+}
+
+impl FieldErrorKind {
+    /// Range of the offending part of the value, relative to the value, if it is more
+    /// specific than the whole value.
+    fn range(&self) -> Option<TextRange> {
+        match self {
+            Self::Relations(e) => e.errors().first().map(|e| e.range),
+            // TODO: report the position of the invalid remote
+            Self::Url { .. } | Self::Logical(_) | Self::Remotes(_) => None,
+        }
+    }
 }
 
 impl std::fmt::Display for FieldErrorKind {
@@ -156,6 +169,15 @@ impl FieldError {
     pub fn kind(&self) -> &FieldErrorKind {
         &self.kind
     }
+
+    /// Byte range in the file of the invalid part of the value.
+    ///
+    /// For list fields such as `Imports` this is the offending entry; otherwise it is the
+    /// whole value. Like [`RDescription::value_range`], this refers to the file as it was
+    /// when the error was returned.
+    pub fn range(&self) -> TextRange {
+        self.range
+    }
 }
 
 impl std::fmt::Display for FieldError {
@@ -173,6 +195,22 @@ impl std::error::Error for FieldError {
             FieldErrorKind::Remotes(e) => Some(e),
         }
     }
+}
+
+/// Map an offset in the value of a field, as returned by `Entry::value`, to an offset in
+/// the file.
+///
+/// `lines` are the source ranges of the value lines; the value consists of these lines,
+/// without indentation, joined by newlines.
+fn value_offset_to_source(lines: &[TextRange], offset: rowan::TextSize) -> rowan::TextSize {
+    let mut line_start = rowan::TextSize::from(0);
+    for line in lines {
+        if offset <= line_start + line.len() {
+            return line.start() + (offset - line_start);
+        }
+        line_start += line.len() + rowan::TextSize::from(1);
+    }
+    lines.last().map_or(offset, |line| line.end())
 }
 
 /// Parse a logical field value such as `LazyData`.
@@ -251,10 +289,22 @@ impl RDescription {
         field: &'static str,
         parse: impl FnOnce(&str) -> Result<T, FieldErrorKind>,
     ) -> Result<Option<T>, FieldError> {
-        self.0
-            .get(field)
-            .map(|value| parse(&value).map_err(|kind| FieldError { field, kind }))
-            .transpose()
+        let Some(entry) = self.0.get_entry(field) else {
+            return Ok(None);
+        };
+        parse(&entry.value()).map(Some).map_err(|kind| {
+            let lines = entry.value_line_ranges();
+            let range = match (kind.range(), lines.first(), lines.last()) {
+                (Some(range), _, _) => TextRange::new(
+                    value_offset_to_source(&lines, range.start()),
+                    value_offset_to_source(&lines, range.end()),
+                ),
+                (None, Some(first), Some(last)) => first.cover(*last),
+                // The value is empty, so point at the whole entry.
+                _ => entry.text_range(),
+            };
+            FieldError { field, kind, range }
+        })
     }
 
     /// Return the package name
@@ -565,7 +615,7 @@ pub mod relations {
     use crate::relations::SyntaxKind::{self, *};
     use crate::relations::{RelationParseError, VersionConstraint};
     use crate::version::{Version as LossyVersion, VersionParseError};
-    use rowan::{Direction, NodeOrToken};
+    use rowan::{Direction, NodeOrToken, TextRange, TextSize};
     use std::cmp::Ordering;
     use std::hash::{Hash, Hasher};
 
@@ -658,13 +708,34 @@ pub mod relations {
         a_components.len().cmp(&b_components.len())
     }
 
+    /// A relation parse error, with the byte range in the input where it occurred.
+    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+    pub struct PositionedRelationParseError {
+        /// The error.
+        pub error: RelationParseError,
+        /// Where in the input the error occurred.
+        pub range: TextRange,
+    }
+
+    impl std::fmt::Display for PositionedRelationParseError {
+        fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            self.error.fmt(f)
+        }
+    }
+
+    impl std::error::Error for PositionedRelationParseError {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            Some(&self.error)
+        }
+    }
+
     /// Error type for parsing relations fields
     #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-    pub struct ParseError(Vec<RelationParseError>);
+    pub struct ParseError(Vec<PositionedRelationParseError>);
 
     impl ParseError {
         /// The errors that were encountered, in the order they occur in the input.
-        pub fn errors(&self) -> &[RelationParseError] {
+        pub fn errors(&self) -> &[PositionedRelationParseError] {
             &self.0
         }
     }
@@ -728,7 +799,7 @@ pub mod relations {
     /// We'll discuss working with the results later
     struct Parse {
         green_node: GreenNode,
-        errors: Vec<RelationParseError>,
+        errors: Vec<PositionedRelationParseError>,
     }
 
     fn parse(text: &str) -> Parse {
@@ -740,7 +811,9 @@ pub mod relations {
             builder: GreenNodeBuilder<'static>,
             /// the list of syntax errors we've accumulated
             /// so far.
-            errors: Vec<RelationParseError>,
+            errors: Vec<PositionedRelationParseError>,
+            /// byte offset of the next token in the input.
+            offset: TextSize,
         }
 
         impl Parser {
@@ -753,8 +826,25 @@ pub mod relations {
                 self.error(error);
             }
 
+            /// Range of the next `n` tokens.
+            fn next_range(&self, n: usize) -> TextRange {
+                let len: TextSize = self
+                    .tokens
+                    .iter()
+                    .rev()
+                    .take(n)
+                    .map(|(_, text)| TextSize::of(text.as_str()))
+                    .sum();
+                TextRange::at(self.offset, len)
+            }
+
+            fn push_error(&mut self, error: RelationParseError, range: TextRange) {
+                self.errors
+                    .push(PositionedRelationParseError { error, range });
+            }
+
             fn error(&mut self, error: RelationParseError) {
-                self.errors.push(error);
+                self.push_error(error, self.next_range(1));
                 self.builder.start_node(SyntaxKind::ERROR.into());
                 if self.current().is_some() {
                     self.bump();
@@ -796,14 +886,17 @@ pub mod relations {
                     let operator_len = operator.len();
                     let operator = operator.concat();
                     if operator.is_empty() {
-                        self.errors.push(RelationParseError::MissingConstraint);
+                        self.push_error(RelationParseError::MissingConstraint, self.next_range(0));
                     } else {
                         // Invalid operators are kept in an error node so that
                         // Relation::version() does not see them.
                         let kind = match operator.parse::<VersionConstraint>() {
                             Ok(_) => CONSTRAINT,
                             Err(e) => {
-                                self.errors.push(RelationParseError::InvalidConstraint(e));
+                                self.push_error(
+                                    RelationParseError::InvalidConstraint(e),
+                                    self.next_range(operator_len),
+                                );
                                 ERROR
                             }
                         };
@@ -834,9 +927,10 @@ pub mod relations {
                     } else {
                         match self.current() {
                             // Leave the comma so the next relation can still be parsed.
-                            None | Some(COMMA) => self
-                                .errors
-                                .push(RelationParseError::MissingClosingParenthesis),
+                            None | Some(COMMA) => self.push_error(
+                                RelationParseError::MissingClosingParenthesis,
+                                self.next_range(0),
+                            ),
                             Some(_) => self.unexpected(),
                         }
                     }
@@ -884,6 +978,7 @@ pub mod relations {
             /// Advance one token, adding it to the current branch of the tree builder.
             fn bump(&mut self) {
                 let (kind, text) = self.tokens.pop().unwrap();
+                self.offset += TextSize::of(text.as_str());
                 self.builder.token(kind.into(), text.as_str());
             }
             /// Peek at the first unprocessed token
@@ -915,6 +1010,7 @@ pub mod relations {
             tokens,
             builder: GreenNodeBuilder::new(),
             errors: Vec::new(),
+            offset: TextSize::from(0),
         }
         .parse()
     }
@@ -1139,7 +1235,7 @@ pub mod relations {
         }
 
         /// Parse a relations field from a string, allowing syntax errors
-        pub fn parse_relaxed(s: &str) -> (Relations, Vec<RelationParseError>) {
+        pub fn parse_relaxed(s: &str) -> (Relations, Vec<PositionedRelationParseError>) {
             let parse = parse(s);
             (parse.root_mut(), parse.errors)
         }
@@ -1609,11 +1705,17 @@ pub mod relations {
             let relation = if let Some(relation) = relations.next() {
                 relation
             } else {
-                return Err(ParseError(vec![RelationParseError::NoRelation]));
+                return Err(ParseError(vec![PositionedRelationParseError {
+                    error: RelationParseError::NoRelation,
+                    range: TextRange::up_to(TextSize::of(s)),
+                }]));
             };
 
             if relations.next().is_some() {
-                return Err(ParseError(vec![RelationParseError::MultipleRelations]));
+                return Err(ParseError(vec![PositionedRelationParseError {
+                    error: RelationParseError::MultipleRelations,
+                    range: TextRange::up_to(TextSize::of(s)),
+                }]));
             }
 
             Ok(relation)
@@ -1623,6 +1725,17 @@ pub mod relations {
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        /// Pair each error with the text it points at.
+        fn located<'a>(
+            input: &'a str,
+            errors: &[PositionedRelationParseError],
+        ) -> Vec<(RelationParseError, &'a str)> {
+            errors
+                .iter()
+                .map(|e| (e.error.clone(), &input[e.range]))
+                .collect()
+        }
 
         #[test]
         fn test_parse() {
@@ -1824,11 +1937,23 @@ pub mod relations {
         fn test_insert_after_error() {
             let (mut rels, errors) = Relations::parse_relaxed("@foo@, debhelper (>= 1.0)");
             assert_eq!(
-                errors,
+                errors
+                    .iter()
+                    .map(|e| (e.error.clone(), e.range))
+                    .collect::<Vec<_>>(),
                 vec![
-                    RelationParseError::UnexpectedToken("@".to_string()),
-                    RelationParseError::UnexpectedToken("foo".to_string()),
-                    RelationParseError::UnexpectedToken("@".to_string()),
+                    (
+                        RelationParseError::UnexpectedToken("@".to_string()),
+                        TextRange::new(0.into(), 1.into())
+                    ),
+                    (
+                        RelationParseError::UnexpectedToken("foo".to_string()),
+                        TextRange::new(1.into(), 4.into())
+                    ),
+                    (
+                        RelationParseError::UnexpectedToken("@".to_string()),
+                        TextRange::new(4.into(), 5.into())
+                    ),
                 ]
             );
             let relation = Relation::simple("bar");
@@ -1840,11 +1965,23 @@ pub mod relations {
         fn test_insert_before_error() {
             let (mut rels, errors) = Relations::parse_relaxed("debhelper (>= 1.0), @foo@, bla");
             assert_eq!(
-                errors,
+                errors
+                    .iter()
+                    .map(|e| (e.error.clone(), e.range))
+                    .collect::<Vec<_>>(),
                 vec![
-                    RelationParseError::UnexpectedToken("@".to_string()),
-                    RelationParseError::UnexpectedToken("foo".to_string()),
-                    RelationParseError::UnexpectedToken("@".to_string()),
+                    (
+                        RelationParseError::UnexpectedToken("@".to_string()),
+                        TextRange::new(20.into(), 21.into())
+                    ),
+                    (
+                        RelationParseError::UnexpectedToken("foo".to_string()),
+                        TextRange::new(21.into(), 24.into())
+                    ),
+                    (
+                        RelationParseError::UnexpectedToken("@".to_string()),
+                        TextRange::new(24.into(), 25.into())
+                    ),
                 ]
             );
             let relation = Relation::simple("bar");
@@ -1857,12 +1994,14 @@ pub mod relations {
             let invalid = RelationParseError::InvalidConstraint(
                 crate::VersionConstraintParseError(">>=".to_string()),
             );
+            let input = "foo (>>= 1.0)";
             assert_eq!(
-                "foo (>>= 1.0)".parse::<Relations>().unwrap_err().errors(),
-                std::slice::from_ref(&invalid)
+                located(input, input.parse::<Relations>().unwrap_err().errors()),
+                vec![(invalid.clone(), ">>=")]
             );
-            let (rels, errors) = Relations::parse_relaxed("foo (>>= 1.0), bar (>= 2.0)");
-            assert_eq!(errors, vec![invalid]);
+            let input = "foo (>>= 1.0), bar (>= 2.0)";
+            let (rels, errors) = Relations::parse_relaxed(input);
+            assert_eq!(located(input, &errors), vec![(invalid, ">>=")]);
             assert_eq!(rels.to_string(), "foo (>>= 1.0), bar (>= 2.0)");
             let versions: Vec<_> = rels.relations().map(|r| r.version()).collect();
             assert_eq!(
@@ -1885,16 +2024,21 @@ pub mod relations {
 
         #[test]
         fn test_missing_closing_parenthesis() {
+            let err = "foo (>= 1.0".parse::<Relations>().unwrap_err();
             assert_eq!(
-                "foo (>= 1.0".parse::<Relations>().unwrap_err().errors(),
-                [RelationParseError::MissingClosingParenthesis]
+                err.errors(),
+                [PositionedRelationParseError {
+                    error: RelationParseError::MissingClosingParenthesis,
+                    range: TextRange::empty(11.into()),
+                }]
             );
+            let input = "foo (>= 1.0 bar)";
             assert_eq!(
-                "foo (>= 1.0 bar)"
-                    .parse::<Relations>()
-                    .unwrap_err()
-                    .errors()[0],
-                RelationParseError::UnexpectedToken("bar".to_string())
+                located(input, input.parse::<Relations>().unwrap_err().errors())[0],
+                (
+                    RelationParseError::UnexpectedToken("bar".to_string()),
+                    "bar"
+                )
             );
         }
 
@@ -1902,7 +2046,10 @@ pub mod relations {
         fn test_missing_constraint() {
             assert_eq!(
                 "foo (1.0)".parse::<Relations>().unwrap_err().errors(),
-                [RelationParseError::MissingConstraint]
+                [PositionedRelationParseError {
+                    error: RelationParseError::MissingConstraint,
+                    range: TextRange::empty(5.into()),
+                }]
             );
             let (rels, _) = Relations::parse_relaxed("foo (1.0)");
             assert_eq!(rels.relations().next().unwrap().version(), None);
@@ -1913,11 +2060,15 @@ pub mod relations {
             let invalid = RelationParseError::InvalidVersion(VersionParseError::InvalidComponent(
                 "beta".to_string(),
             ));
-            let err = "foo (>= 1.0-beta)".parse::<Relations>().unwrap_err();
-            assert_eq!(err.errors(), std::slice::from_ref(&invalid));
+            let input = "foo (>= 1.0-beta)";
+            let err = input.parse::<Relations>().unwrap_err();
+            assert_eq!(
+                located(input, err.errors()),
+                vec![(invalid.clone(), "1.0-beta")]
+            );
             assert_eq!(err.to_string(), "invalid version component \"beta\"");
-            let (rels, errors) = Relations::parse_relaxed("foo (>= 1.0-beta)");
-            assert_eq!(errors, vec![invalid]);
+            let (rels, errors) = Relations::parse_relaxed(input);
+            assert_eq!(located(input, &errors), vec![(invalid, "1.0-beta")]);
             assert_eq!(rels.to_string(), "foo (>= 1.0-beta)");
             assert_eq!(rels.relations().next().unwrap().version(), None);
         }
@@ -1942,12 +2093,15 @@ pub mod relations {
                 ))
             );
             assert_eq!(
-                "foo, bar".parse::<Relation>().unwrap_err().errors(),
-                [RelationParseError::MultipleRelations]
+                located(
+                    "foo, bar",
+                    "foo, bar".parse::<Relation>().unwrap_err().errors()
+                ),
+                vec![(RelationParseError::MultipleRelations, "foo, bar")]
             );
             assert_eq!(
-                "".parse::<Relation>().unwrap_err().errors(),
-                [RelationParseError::NoRelation]
+                located("", "".parse::<Relation>().unwrap_err().errors()),
+                vec![(RelationParseError::NoRelation, "")]
             );
         }
 
@@ -2359,13 +2513,57 @@ Enhances: shiny
 
     #[test]
     fn test_relations_invalid() {
-        let desc: RDescription = "Package: foo\nImports: foo (>= 1.0, bar\n".parse().unwrap();
+        let s = "Package: foo\nImports: foo (>= 1.0, bar\n";
+        let desc: RDescription = s.parse().unwrap();
         let err = desc.imports().unwrap_err();
         assert_eq!(err.field(), "Imports");
         let FieldErrorKind::Relations(e) = err.kind() else {
             panic!("unexpected error kind: {:?}", err.kind());
         };
-        assert_eq!(e.errors(), [RelationParseError::MissingClosingParenthesis]);
+        assert_eq!(
+            e.errors()
+                .iter()
+                .map(|e| e.error.clone())
+                .collect::<Vec<_>>(),
+            [RelationParseError::MissingClosingParenthesis]
+        );
+        assert_eq!(err.range(), TextRange::empty(33.into()));
+        assert_eq!(
+            &s[..usize::from(err.range().start())],
+            "Package: foo\nImports: foo (>= 1.0"
+        );
+    }
+
+    #[test]
+    fn test_field_error_range_multiline() {
+        let s = "Package: foo\nImports:\n    cli,\n    glue (>> 1.0),\n    rlang\n";
+        let desc: RDescription = s.parse().unwrap();
+        let err = desc.imports().unwrap_err();
+        assert_eq!(&s[err.range()], ">>");
+    }
+
+    #[test]
+    fn test_field_error_range_whole_value() {
+        let s = "Package: foo\nLazyData: maybe\n";
+        let desc: RDescription = s.parse().unwrap();
+        assert_eq!(&s[desc.lazy_data().unwrap_err().range()], "maybe");
+
+        let s = "Package: foo\nBugReports:\n    not a url\n";
+        let desc: RDescription = s.parse().unwrap();
+        assert_eq!(&s[desc.bug_reports().unwrap_err().range()], "not a url");
+    }
+
+    #[test]
+    fn test_value_offset_to_source() {
+        // Value lines "a," and "bc" at 11..13 and 18..20 give the value "a,\nbc".
+        let lines = [
+            TextRange::new(11.into(), 13.into()),
+            TextRange::new(18.into(), 20.into()),
+        ];
+        assert_eq!(value_offset_to_source(&lines, 0.into()), 11.into());
+        assert_eq!(value_offset_to_source(&lines, 2.into()), 13.into());
+        assert_eq!(value_offset_to_source(&lines, 3.into()), 18.into());
+        assert_eq!(value_offset_to_source(&lines, 5.into()), 20.into());
     }
 
     #[test]
