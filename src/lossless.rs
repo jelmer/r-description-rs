@@ -222,6 +222,24 @@ fn parse_logical(value: &str) -> Result<bool, FieldErrorKind> {
     }
 }
 
+/// Parse a list of URLs, ignoring empty entries.
+fn parse_url_list(
+    value: &str,
+    separator: impl Fn(char) -> bool,
+) -> Result<Vec<url::Url>, FieldErrorKind> {
+    value
+        .split(separator)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| {
+            url::Url::parse(s).map_err(|error| FieldErrorKind::Url {
+                url: s.to_string(),
+                error,
+            })
+        })
+        .collect()
+}
+
 impl std::str::FromStr for RDescription {
     type Err = Error;
 
@@ -410,16 +428,18 @@ impl RDescription {
         self.0.set("Roxygen", roxygen);
     }
 
-    /// Return the URL field
-    pub fn url(&self) -> Option<String> {
-        // TODO: parse list of URLs, separated by commas
-        self.0.get("URL")
+    /// Return the URLs for the package, e.g. its homepage and source repository
+    pub fn urls(&self) -> Result<Option<Vec<url::Url>>, FieldError> {
+        self.parse_field("URL", |s| {
+            parse_url_list(s, |c| c == ',' || c.is_whitespace())
+        })
     }
 
-    /// Set the URL field
-    pub fn set_url(&mut self, url: &str) {
-        // TODO: parse list of URLs, separated by commas
-        self.0.set("URL", url);
+    /// Set the URLs for the package
+    ///
+    /// An empty list removes the field.
+    pub fn set_urls(&mut self, urls: &[url::Url]) {
+        self.set_url_list("URL", urls);
     }
 
     /// Return the bug reports URL
@@ -558,19 +578,262 @@ impl RDescription {
     }
 
     /// Additional repositories where dependency packages may be found.
-    pub fn additional_repositories(&self) -> Option<Vec<String>> {
-        self.0.get("Additional_repositories").map(|s| {
-            s.split(',')
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .collect()
+    pub fn additional_repositories(&self) -> Result<Option<Vec<url::Url>>, FieldError> {
+        self.parse_field("Additional_repositories", |s| {
+            parse_url_list(s, |c| c == ',')
         })
     }
 
     /// Set the additional repositories field.
-    pub fn set_additional_repositories(&mut self, repositories: &[&str]) {
+    ///
+    /// An empty list removes the field.
+    pub fn set_additional_repositories(&mut self, repositories: &[url::Url]) {
+        self.set_url_list("Additional_repositories", repositories);
+    }
+
+    fn set_url_list(&mut self, field: &str, urls: &[url::Url]) {
+        if urls.is_empty() {
+            self.0.remove(field);
+        } else {
+            let value = urls.iter().map(url::Url::as_str).collect::<Vec<_>>();
+            self.0.set(field, &value.join(", "));
+        }
+    }
+
+    /// Return the value of an arbitrary field.
+    ///
+    /// Field names are compared case-insensitively.
+    pub fn get(&self, field: &str) -> Option<String> {
+        self.0.get(field)
+    }
+
+    /// Set the value of an arbitrary field, replacing any existing value.
+    pub fn set(&mut self, field: &str, value: &str) {
+        self.0.set(field, value);
+    }
+
+    /// Remove a field, if present.
+    pub fn remove(&mut self, field: &str) {
+        self.0.remove(field);
+    }
+
+    /// Return the free-form author list
+    pub fn author(&self) -> Option<String> {
+        self.0.get("Author")
+    }
+
+    /// Set the authors
+    pub fn set_author(&mut self, author: &str) {
+        self.0.set("Author", author);
+    }
+
+    /// Return the copyright statement
+    pub fn copyright(&self) -> Option<String> {
+        self.0.get("Copyright")
+    }
+
+    /// Set the copyright
+    pub fn set_copyright(&mut self, copyright: &str) {
+        self.0.set("Copyright", copyright);
+    }
+
+    /// Return the priority, e.g. "base" or "recommended"
+    pub fn priority(&self) -> Option<String> {
+        self.0.get("Priority")
+    }
+
+    /// Set the priority
+    pub fn set_priority(&mut self, priority: &str) {
+        self.0.set("Priority", priority);
+    }
+
+    /// Return the operating system type the package is restricted to, e.g. "unix"
+    pub fn os_type(&self) -> Option<String> {
+        self.0.get("OS_type")
+    }
+
+    /// Set the OS type
+    pub fn set_os_type(&mut self, os_type: &str) {
+        self.0.set("OS_type", os_type);
+    }
+
+    /// Return the package type, e.g. "Package" or "Translation"
+    pub fn package_type(&self) -> Option<String> {
+        self.0.get("Type")
+    }
+
+    /// Set the package type
+    pub fn set_package_type(&mut self, package_type: &str) {
+        self.0.set("Type", package_type);
+    }
+
+    /// Return the contact address for questions, if different from the maintainer
+    pub fn contact(&self) -> Option<String> {
+        self.0.get("Contact")
+    }
+
+    /// Set the contact
+    pub fn set_contact(&mut self, contact: &str) {
+        self.0.set("Contact", contact);
+    }
+
+    /// Return the mailing list for the package
+    pub fn mailing_list(&self) -> Option<String> {
+        self.0.get("MailingList")
+    }
+
+    /// Set the mailing list
+    pub fn set_mailing_list(&mut self, mailing_list: &str) {
+        self.0.set("MailingList", mailing_list);
+    }
+
+    /// Return the additional note
+    pub fn note(&self) -> Option<String> {
+        self.0.get("Note")
+    }
+
+    /// Set the note
+    pub fn set_note(&mut self, note: &str) {
+        self.0.set("Note", note);
+    }
+
+    /// Return the language(s) of the documentation, if not English
+    pub fn language(&self) -> Option<String> {
+        self.0.get("Language")
+    }
+
+    /// Set the language
+    pub fn set_language(&mut self, language: &str) {
+        self.0.set("Language", language);
+    }
+
+    /// Return whether the package uses lazy loading
+    pub fn lazy_load(&self) -> Result<Option<bool>, FieldError> {
+        self.parse_field("LazyLoad", parse_logical)
+    }
+
+    /// Set whether the package uses lazy loading
+    pub fn set_lazy_load(&mut self, lazy_load: bool) {
         self.0
-            .set("Additional_repositories", &repositories.join(", "));
+            .set("LazyLoad", if lazy_load { "true" } else { "false" });
+    }
+
+    /// Return whether R code keeps its source references
+    pub fn keep_source(&self) -> Result<Option<bool>, FieldError> {
+        self.parse_field("KeepSource", parse_logical)
+    }
+
+    /// Set whether R code keeps its source references
+    pub fn set_keep_source(&mut self, keep_source: bool) {
+        self.0
+            .set("KeepSource", if keep_source { "true" } else { "false" });
+    }
+
+    /// Return whether the R code is byte-compiled on installation
+    pub fn byte_compile(&self) -> Result<Option<bool>, FieldError> {
+        self.parse_field("ByteCompile", parse_logical)
+    }
+
+    /// Set whether the R code is byte-compiled on installation
+    pub fn set_byte_compile(&mut self, byte_compile: bool) {
+        self.0
+            .set("ByteCompile", if byte_compile { "true" } else { "false" });
+    }
+
+    /// Return whether native code is compiled with link-time optimization
+    pub fn use_lto(&self) -> Result<Option<bool>, FieldError> {
+        self.parse_field("UseLTO", parse_logical)
+    }
+
+    /// Set whether native code is compiled with link-time optimization
+    pub fn set_use_lto(&mut self, use_lto: bool) {
+        self.0.set("UseLTO", if use_lto { "true" } else { "false" });
+    }
+
+    /// Return whether the package is installed in a staging directory first
+    pub fn staged_install(&self) -> Result<Option<bool>, FieldError> {
+        self.parse_field("StagedInstall", parse_logical)
+    }
+
+    /// Set whether the package is installed in a staging directory first
+    pub fn set_staged_install(&mut self, staged_install: bool) {
+        self.0.set(
+            "StagedInstall",
+            if staged_install { "true" } else { "false" },
+        );
+    }
+
+    /// Return legacy setting for zipping data, ignored by current versions of R
+    pub fn zip_data(&self) -> Result<Option<bool>, FieldError> {
+        self.parse_field("ZipData", parse_logical)
+    }
+
+    /// Set legacy setting for zipping data, ignored by current versions of R
+    pub fn set_zip_data(&mut self, zip_data: bool) {
+        self.0
+            .set("ZipData", if zip_data { "true" } else { "false" });
+    }
+
+    /// Return whether to build for both architectures on Windows
+    pub fn biarch(&self) -> Result<Option<bool>, FieldError> {
+        self.parse_field("Biarch", parse_logical)
+    }
+
+    /// Set whether to build for both architectures on Windows
+    pub fn set_biarch(&mut self, biarch: bool) {
+        self.0.set("Biarch", if biarch { "true" } else { "false" });
+    }
+
+    /// Return whether vignettes are built by R CMD build
+    pub fn build_vignettes(&self) -> Result<Option<bool>, FieldError> {
+        self.parse_field("BuildVignettes", parse_logical)
+    }
+
+    /// Set whether vignettes are built by R CMD build
+    pub fn set_build_vignettes(&mut self, build_vignettes: bool) {
+        self.0.set(
+            "BuildVignettes",
+            if build_vignettes { "true" } else { "false" },
+        );
+    }
+
+    /// Return whether the package contains code that needs compiling
+    pub fn needs_compilation(&self) -> Result<Option<bool>, FieldError> {
+        self.parse_field("NeedsCompilation", parse_logical)
+    }
+
+    /// Set whether the package contains code that needs compiling
+    pub fn set_needs_compilation(&mut self, needs_compilation: bool) {
+        self.0.set(
+            "NeedsCompilation",
+            if needs_compilation { "yes" } else { "no" },
+        );
+    }
+
+    /// Return whether the license is a free or open source license
+    pub fn license_is_foss(&self) -> Result<Option<bool>, FieldError> {
+        self.parse_field("License_is_FOSS", parse_logical)
+    }
+
+    /// Set whether the license is a free or open source license
+    pub fn set_license_is_foss(&mut self, license_is_foss: bool) {
+        self.0.set(
+            "License_is_FOSS",
+            if license_is_foss { "yes" } else { "no" },
+        );
+    }
+
+    /// Return whether the license restricts use
+    pub fn license_restricts_use(&self) -> Result<Option<bool>, FieldError> {
+        self.parse_field("License_restricts_use", parse_logical)
+    }
+
+    /// Set whether the license restricts use
+    pub fn set_license_restricts_use(&mut self, license_restricts_use: bool) {
+        self.0.set(
+            "License_restricts_use",
+            if license_restricts_use { "yes" } else { "no" },
+        );
     }
 
     /// Return the Remotes field, listing non-CRAN sources for dependencies.
@@ -2322,8 +2585,11 @@ Encoding: UTF-8
         let desc: RDescription = s.parse().unwrap();
         assert_eq!("dplyr", desc.package().unwrap());
         assert_eq!(
-            "https://dplyr.tidyverse.org, https://github.com/tidyverse/dplyr",
-            desc.url().unwrap().as_str()
+            desc.urls(),
+            Ok(Some(vec![
+                "https://dplyr.tidyverse.org/".parse().unwrap(),
+                "https://github.com/tidyverse/dplyr".parse().unwrap(),
+            ]))
         );
     }
 
@@ -2581,10 +2847,10 @@ Additional_repositories: https://example.com/src/contrib,
 
         assert_eq!(
             desc.additional_repositories(),
-            Some(vec![
-                "https://example.com/src/contrib".to_string(),
-                "https://example.org/src/contrib".to_string(),
-            ])
+            Ok(Some(vec![
+                "https://example.com/src/contrib".parse().unwrap(),
+                "https://example.org/src/contrib".parse().unwrap(),
+            ]))
         );
     }
 
@@ -2600,16 +2866,16 @@ License: MIT
         .unwrap();
 
         desc.set_additional_repositories(&[
-            "https://example.com/src/contrib",
-            "https://example.org/src/contrib",
+            "https://example.com/src/contrib".parse().unwrap(),
+            "https://example.org/src/contrib".parse().unwrap(),
         ]);
 
         assert_eq!(
             desc.additional_repositories(),
-            Some(vec![
-                "https://example.com/src/contrib".to_string(),
-                "https://example.org/src/contrib".to_string(),
-            ])
+            Ok(Some(vec![
+                "https://example.com/src/contrib".parse().unwrap(),
+                "https://example.org/src/contrib".parse().unwrap(),
+            ]))
         );
         assert_eq!(
             desc.to_string(),
@@ -2635,6 +2901,32 @@ License: MIT
                 "url::https://github.com/tidyverse/stringi/archive/HEAD.zip",
                 "local::/pkgs/testthat",
             ]
+        );
+    }
+
+    #[test]
+    fn test_set_additional_repositories_empty_removes() {
+        let mut desc: RDescription = "Package: foo\nAdditional_repositories: https://example.com\n"
+            .parse()
+            .unwrap();
+        desc.set_additional_repositories(&[]);
+        assert_eq!(desc.additional_repositories(), Ok(None));
+        assert_eq!(desc.to_string(), "Package: foo\n");
+    }
+
+    #[test]
+    fn test_urls() {
+        let desc: RDescription =
+            "Package: foo\nURL: https://a.example.com,https://b.example.com\n    https://c.example.com,\n"
+                .parse()
+                .unwrap();
+        assert_eq!(
+            desc.urls(),
+            Ok(Some(vec![
+                "https://a.example.com".parse().unwrap(),
+                "https://b.example.com".parse().unwrap(),
+                "https://c.example.com".parse().unwrap(),
+            ]))
         );
     }
 
@@ -2690,5 +2982,110 @@ License: MIT
             Err(crate::remotes::RemoteParseError::Whitespace)
         );
         assert_eq!(desc.to_string(), "Package: mypackage\nRemotes: old/repo\n");
+    }
+
+    #[test]
+    fn test_urls_invalid() {
+        let desc: RDescription = "Package: foo\nURL: https://example.com, not-a-url\n"
+            .parse()
+            .unwrap();
+        let err = desc.urls().unwrap_err();
+        assert_eq!(err.field(), "URL");
+        assert_eq!(
+            err.kind(),
+            &FieldErrorKind::Url {
+                url: "not-a-url".to_string(),
+                error: url::ParseError::RelativeUrlWithoutBase,
+            }
+        );
+    }
+
+    #[test]
+    fn test_set_urls() {
+        let mut desc: RDescription = "Package: foo\n".parse().unwrap();
+        desc.set_urls(&[
+            "https://a.example.com/".parse().unwrap(),
+            "https://b.example.com/".parse().unwrap(),
+        ]);
+        assert_eq!(
+            desc.to_string(),
+            "Package: foo\nURL: https://a.example.com/, https://b.example.com/\n"
+        );
+        desc.set_urls(&[]);
+        assert_eq!(desc.to_string(), "Package: foo\n");
+    }
+
+    #[test]
+    fn test_named_fields() {
+        let s = r###"Package: foo
+Author: A. Person
+Copyright: The authors
+Priority: recommended
+OS_type: unix
+Type: Package
+Contact: help@example.com
+MailingList: list@example.com
+Note: A note
+Language: nl
+LazyLoad: yes
+KeepSource: no
+ByteCompile: true
+UseLTO: false
+StagedInstall: TRUE
+ZipData: no
+Biarch: yes
+BuildVignettes: false
+NeedsCompilation: yes
+License_is_FOSS: yes
+License_restricts_use: no
+"###;
+        let desc: RDescription = s.parse().unwrap();
+        assert_eq!(desc.author(), Some("A. Person".to_string()));
+        assert_eq!(desc.copyright(), Some("The authors".to_string()));
+        assert_eq!(desc.priority(), Some("recommended".to_string()));
+        assert_eq!(desc.os_type(), Some("unix".to_string()));
+        assert_eq!(desc.package_type(), Some("Package".to_string()));
+        assert_eq!(desc.contact(), Some("help@example.com".to_string()));
+        assert_eq!(desc.mailing_list(), Some("list@example.com".to_string()));
+        assert_eq!(desc.note(), Some("A note".to_string()));
+        assert_eq!(desc.language(), Some("nl".to_string()));
+        assert_eq!(desc.lazy_load(), Ok(Some(true)));
+        assert_eq!(desc.keep_source(), Ok(Some(false)));
+        assert_eq!(desc.byte_compile(), Ok(Some(true)));
+        assert_eq!(desc.use_lto(), Ok(Some(false)));
+        assert_eq!(desc.staged_install(), Ok(Some(true)));
+        assert_eq!(desc.zip_data(), Ok(Some(false)));
+        assert_eq!(desc.biarch(), Ok(Some(true)));
+        assert_eq!(desc.build_vignettes(), Ok(Some(false)));
+        assert_eq!(desc.needs_compilation(), Ok(Some(true)));
+        assert_eq!(desc.license_is_foss(), Ok(Some(true)));
+        assert_eq!(desc.license_restricts_use(), Ok(Some(false)));
+
+        let desc: RDescription = "Package: foo\n".parse().unwrap();
+        assert_eq!(desc.author(), None);
+        assert_eq!(desc.needs_compilation(), Ok(None));
+    }
+
+    #[test]
+    fn test_set_named_fields() {
+        let mut desc: RDescription = "Package: foo\n".parse().unwrap();
+        desc.set_package_type("Package");
+        desc.set_byte_compile(true);
+        desc.set_needs_compilation(false);
+        assert_eq!(
+            desc.to_string(),
+            "Package: foo\nType: Package\nByteCompile: true\nNeedsCompilation: no\n"
+        );
+    }
+
+    #[test]
+    fn test_generic_field_access() {
+        let mut desc: RDescription = "Package: foo\nX-Custom: bar\n".parse().unwrap();
+        assert_eq!(desc.get("x-custom"), Some("bar".to_string()));
+        desc.set("X-Custom", "baz");
+        assert_eq!(desc.get("X-Custom"), Some("baz".to_string()));
+        desc.remove("X-Custom");
+        assert_eq!(desc.get("X-Custom"), None);
+        assert_eq!(desc.to_string(), "Package: foo\n");
     }
 }

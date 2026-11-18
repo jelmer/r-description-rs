@@ -208,6 +208,82 @@ pub struct RDescription {
     #[deb822(field = "Remotes", serialize_with = serialize_remotes, deserialize_with = parse_remotes)]
     /// Non-CRAN sources for dependencies.
     pub remotes: Option<Vec<Remote>>,
+
+    #[deb822(field = "Enhances")]
+    /// The packages that this package enhances.
+    pub enhances: Option<Relations>,
+
+    #[deb822(field = "Copyright")]
+    /// Copyright statement.
+    pub copyright: Option<String>,
+
+    #[deb822(field = "Priority")]
+    /// Priority, e.g. "base" or "recommended".
+    pub priority: Option<String>,
+
+    #[deb822(field = "OS_type")]
+    /// Operating system type the package is restricted to, e.g. "unix".
+    pub os_type: Option<String>,
+
+    #[deb822(field = "Type")]
+    /// Package type, e.g. "Package" or "Translation".
+    pub package_type: Option<String>,
+
+    #[deb822(field = "Contact")]
+    /// Contact address for questions, if different from the maintainer.
+    pub contact: Option<String>,
+
+    #[deb822(field = "MailingList")]
+    /// Mailing list for the package.
+    pub mailing_list: Option<String>,
+
+    #[deb822(field = "Note")]
+    /// Additional note.
+    pub note: Option<String>,
+
+    #[deb822(field = "LazyLoad")]
+    /// Whether the package uses lazy loading.
+    pub lazy_load: Option<String>,
+
+    #[deb822(field = "KeepSource")]
+    /// Whether R code keeps its source references.
+    pub keep_source: Option<String>,
+
+    #[deb822(field = "ByteCompile")]
+    /// Whether the R code is byte-compiled on installation.
+    pub byte_compile: Option<String>,
+
+    #[deb822(field = "UseLTO")]
+    /// Whether native code is compiled with link-time optimization.
+    pub use_lto: Option<String>,
+
+    #[deb822(field = "StagedInstall")]
+    /// Whether the package is installed in a staging directory first.
+    pub staged_install: Option<String>,
+
+    #[deb822(field = "ZipData")]
+    /// Legacy setting for zipping data, ignored by current versions of R.
+    pub zip_data: Option<String>,
+
+    #[deb822(field = "Biarch")]
+    /// Whether to build for both architectures on Windows.
+    pub biarch: Option<String>,
+
+    #[deb822(field = "BuildVignettes")]
+    /// Whether vignettes are built by R CMD build.
+    pub build_vignettes: Option<String>,
+
+    #[deb822(field = "NeedsCompilation")]
+    /// Whether the package contains code that needs compiling.
+    pub needs_compilation: Option<String>,
+
+    #[deb822(field = "License_is_FOSS")]
+    /// Whether the license is a free or open source license.
+    pub license_is_foss: Option<String>,
+
+    #[deb822(field = "License_restricts_use")]
+    /// Whether the license restricts use.
+    pub license_restricts_use: Option<String>,
 }
 
 /// A relation entry in a relationship field.
@@ -886,5 +962,24 @@ Remotes: r-lib/httr@v0.4 gitlab::jimhester/covr
         ] {
             assert_eq!(input.parse::<Relation>(), Err(expected), "{input}");
         }
+    }
+
+    #[test]
+    fn test_parse_named_fields() {
+        let desc: RDescription = r###"Package: foo
+Title: Foo
+Description: A foo package
+Version: 1.0
+License: MIT
+Enhances: shiny
+Type: Package
+NeedsCompilation: no
+"###
+        .parse()
+        .unwrap();
+        assert_eq!(desc.enhances, Some("shiny".parse().unwrap()));
+        assert_eq!(desc.package_type, Some("Package".to_string()));
+        assert_eq!(desc.needs_compilation, Some("no".to_string()));
+        assert_eq!(desc.copyright, None);
     }
 }
