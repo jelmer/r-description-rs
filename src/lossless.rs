@@ -28,6 +28,7 @@
 //!
 //! See https://r-pkgs.org/description.html for more information.
 
+use crate::remotes::{format_remotes, parse_remotes, Remote, RemoteParseError};
 use crate::RCode;
 use deb822_lossless::{Deb822, Paragraph};
 pub use deb822_lossless::{PositionedParseError, TextRange};
@@ -472,6 +473,23 @@ impl RDescription {
     pub fn set_additional_repositories(&mut self, repositories: &[&str]) {
         self.0
             .set("Additional_repositories", &repositories.join(", "));
+    }
+
+    /// Return the Remotes field, listing non-CRAN sources for dependencies.
+    pub fn remotes(&self) -> Result<Option<Vec<Remote>>, RemoteParseError> {
+        self.0.get("Remotes").map(|s| parse_remotes(&s)).transpose()
+    }
+
+    /// Set the Remotes field. An empty slice removes the field.
+    ///
+    /// Fails without modifying the field if a remote can not be represented.
+    pub fn set_remotes(&mut self, remotes: &[Remote]) -> Result<(), RemoteParseError> {
+        if remotes.is_empty() {
+            self.0.remove("Remotes");
+        } else {
+            self.0.set("Remotes", &format_remotes(remotes)?);
+        }
+        Ok(())
     }
 }
 
@@ -2234,5 +2252,75 @@ License: MIT
             desc.to_string(),
             "Package: mypackage\nTitle: What the Package Does\nVersion: 1.0.0\nDescription: What the package does.\nLicense: MIT\nAdditional_repositories: https://example.com/src/contrib, https://example.org/src/contrib\n"
         );
+    }
+
+    #[test]
+    fn test_remotes() {
+        let desc: RDescription = include_str!("../testdata/remotes.desc").parse().unwrap();
+        let remotes = desc.remotes().unwrap().unwrap();
+        assert_eq!(
+            remotes.iter().map(|r| r.to_string()).collect::<Vec<_>>(),
+            vec![
+                "httr=r-lib/httr@v0.4",
+                "klutometis/roxygen#142",
+                "gitlab::jimhester/covr",
+                "git::git@bitbucket.org:djnavarro/lsr.git",
+                "git::https://github.com/igraph/rigraph.git@main",
+                "bitbucket::sulab/mygene.r@default",
+                "bioc::3.3/SummarizedExperiment#117513",
+                "svn::https://svn.example.com/stringr/trunk",
+                "url::https://github.com/tidyverse/stringi/archive/HEAD.zip",
+                "local::/pkgs/testthat",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_remotes_missing() {
+        let desc: RDescription = "Package: mypackage\n".parse().unwrap();
+        assert_eq!(desc.remotes(), Ok(None));
+    }
+
+    #[test]
+    fn test_remotes_invalid() {
+        let desc: RDescription = "Package: mypackage\nRemotes: r-lib/httr,,r-lib/covr\n"
+            .parse()
+            .unwrap();
+        assert_eq!(desc.remotes(), Err(crate::remotes::RemoteParseError::Empty));
+    }
+
+    #[test]
+    fn test_set_remotes() {
+        let mut desc: RDescription = "Package: mypackage\nRemotes: old/repo\nLicense: MIT\n"
+            .parse()
+            .unwrap();
+        let remotes: Vec<Remote> = vec![
+            "r-lib/httr@v0.4".parse().unwrap(),
+            "cran::dplyr".parse().unwrap(),
+        ];
+        desc.set_remotes(&remotes).unwrap();
+        assert_eq!(
+            desc.to_string(),
+            "Package: mypackage\nRemotes: r-lib/httr@v0.4, cran::dplyr\nLicense: MIT\n"
+        );
+        assert_eq!(desc.remotes(), Ok(Some(remotes)));
+
+        desc.set_remotes(&[]).unwrap();
+        assert_eq!(desc.to_string(), "Package: mypackage\nLicense: MIT\n");
+        assert_eq!(desc.remotes(), Ok(None));
+    }
+
+    #[test]
+    fn test_set_remotes_unrepresentable() {
+        let mut desc: RDescription = "Package: mypackage\nRemotes: old/repo\n".parse().unwrap();
+        let remote = Remote {
+            package: None,
+            source: crate::remotes::RemoteSource::Local("a path".to_string()),
+        };
+        assert_eq!(
+            desc.set_remotes(&[remote]),
+            Err(crate::remotes::RemoteParseError::Whitespace)
+        );
+        assert_eq!(desc.to_string(), "Package: mypackage\nRemotes: old/repo\n");
     }
 }

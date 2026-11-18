@@ -9,6 +9,7 @@
 use deb822_derive::{FromDeb822, ToDeb822};
 use deb822_fast::{FromDeb822Paragraph, ToDeb822Paragraph};
 
+use crate::remotes::{parse_remotes, Remote};
 use crate::RCode;
 use std::iter::Peekable;
 
@@ -91,6 +92,16 @@ fn deserialize_repository_list(s: &str) -> Result<Vec<url::Url>, String> {
         .filter(|s| !s.trim().is_empty())
         .map(|s| url::Url::parse(s.trim()).map_err(|e| e.to_string()))
         .collect()
+}
+
+// ToDeb822 does not allow serialization to fail, so unlike
+// remotes::format_remotes this does not check that each remote round-trips.
+fn serialize_remotes(remotes: &[Remote]) -> String {
+    remotes
+        .iter()
+        .map(|r| r.to_string())
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 #[derive(FromDeb822, ToDeb822, Debug, PartialEq, Eq)]
@@ -193,6 +204,10 @@ pub struct RDescription {
     #[deb822(field = "Additional_repositories", serialize_with = serialize_repository_list, deserialize_with = deserialize_repository_list)]
     /// Additional repositories where dependency packages may be found.
     pub additional_repositories: Option<Vec<url::Url>>,
+
+    #[deb822(field = "Remotes", serialize_with = serialize_remotes, deserialize_with = parse_remotes)]
+    /// Non-CRAN sources for dependencies.
+    pub remotes: Option<Vec<Remote>>,
 }
 
 /// A relation entry in a relationship field.
@@ -788,6 +803,51 @@ Additional_repositories: https://example.com/src/contrib,
         assert_eq!(
             desc.to_string(),
             "Package: mypackage\nDescription: What the package does.\nTitle: What the Package Does\nVersion: 1.0.0\nLicense: MIT\nAdditional_repositories: https://example.com/src/contrib, https://example.org/src/contrib\n"
+        );
+    }
+
+    #[test]
+    fn test_parse_remotes() {
+        let s = r###"Package: mypackage
+Title: What the Package Does
+Version: 1.0.0
+Description: What the package does.
+License: MIT
+Remotes: r-lib/httr@v0.4,
+    gitlab::jimhester/covr,
+    bioc::release/Biobase,
+"###;
+        let desc: RDescription = s.parse().unwrap();
+
+        assert_eq!(
+            desc.remotes,
+            Some(vec![
+                "r-lib/httr@v0.4".parse().unwrap(),
+                "gitlab::jimhester/covr".parse().unwrap(),
+                "bioc::release/Biobase".parse().unwrap(),
+            ])
+        );
+        assert_eq!(
+            desc.to_string(),
+            "Package: mypackage\nDescription: What the package does.\nTitle: What the Package Does\nVersion: 1.0.0\nLicense: MIT\nRemotes: r-lib/httr@v0.4, gitlab::jimhester/covr, bioc::release/Biobase\n"
+        );
+    }
+
+    #[test]
+    fn test_parse_invalid_remotes() {
+        let s = r###"Package: mypackage
+Title: What the Package Does
+Version: 1.0.0
+Description: What the package does.
+License: MIT
+Remotes: r-lib/httr@v0.4 gitlab::jimhester/covr
+"###;
+        assert_eq!(
+            s.parse::<RDescription>(),
+            Err(
+                "parsing field Remotes: whitespace in remote specification (missing comma?)"
+                    .to_string()
+            )
         );
     }
 }

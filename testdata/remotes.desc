@@ -1,0 +1,17 @@
+Package: remotesexample
+Title: Remote Sources
+Version: 1.0.0
+Description: Exercises the Remotes field.
+License: MIT
+Imports: httr, roxygen2, covr, lsr, rigraph, mygene, Biobase, stringr,
+    stringi, testthat
+Remotes: httr=r-lib/httr@v0.4,
+    klutometis/roxygen#142,
+    gitlab::jimhester/covr,
+    git::git@bitbucket.org:djnavarro/lsr.git,
+    git::https://github.com/igraph/rigraph.git@main,
+    bitbucket::sulab/mygene.r@default,
+    bioc::3.3/SummarizedExperiment#117513,
+    svn::https://svn.example.com/stringr/trunk,
+    url::https://github.com/tidyverse/stringi/archive/HEAD.zip,
+    local::/pkgs/testthat,
