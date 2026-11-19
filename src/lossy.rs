@@ -219,11 +219,11 @@ pub struct RDescription {
 
     #[deb822(field = "Priority")]
     /// Priority, e.g. "base" or "recommended".
-    pub priority: Option<String>,
+    pub priority: Option<crate::Priority>,
 
     #[deb822(field = "OS_type")]
     /// Operating system type the package is restricted to, e.g. "unix".
-    pub os_type: Option<String>,
+    pub os_type: Option<crate::OsType>,
 
     #[deb822(field = "Type")]
     /// Package type, e.g. "Package" or "Translation".
@@ -981,5 +981,19 @@ NeedsCompilation: no
         assert_eq!(desc.package_type, Some("Package".to_string()));
         assert_eq!(desc.needs_compilation, Some("no".to_string()));
         assert_eq!(desc.copyright, None);
+    }
+
+    #[test]
+    fn test_os_type_and_priority() {
+        let s = "Package: foo\nTitle: Foo\nDescription: A foo package\nVersion: 1.0\nLicense: MIT\nOS_type: unix\nPriority: recommended\n";
+        let desc: RDescription = s.parse().unwrap();
+        assert_eq!(desc.os_type, Some(crate::OsType::Unix));
+        assert_eq!(desc.priority, Some(crate::Priority::Recommended));
+
+        let invalid = s.replace("unix", "mac");
+        assert_eq!(
+            invalid.parse::<RDescription>(),
+            Err("parsing field OS_type: expected unix or windows, got \"mac\"".to_string())
+        );
     }
 }
