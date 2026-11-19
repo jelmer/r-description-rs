@@ -202,6 +202,29 @@ impl std::error::Error for FieldError {
     }
 }
 
+/// Error returned when a field name can not be used in a DESCRIPTION file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InvalidFieldName(pub String);
+
+impl std::fmt::Display for InvalidFieldName {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "invalid field name {:?}", self.0)
+    }
+}
+
+impl std::error::Error for InvalidFieldName {}
+
+/// Check whether `name` is a portable field name.
+///
+/// R itself accepts anything before the first colon, but Writing R Extensions requires
+/// ASCII names, and some names, such as ones containing spaces, are not read back
+/// correctly by the parser.
+fn is_valid_field_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    chars.next().is_some_and(|c| c.is_ascii_alphanumeric())
+        && chars.all(|c| c.is_ascii_graphic() && c != ':')
+}
+
 /// Map an offset in the value of a field, as returned by `Entry::value`, to an offset in
 /// the file.
 ///
@@ -613,8 +636,15 @@ impl RDescription {
     }
 
     /// Set the value of an arbitrary field, replacing any existing value.
-    pub fn set(&mut self, field: &str, value: &str) {
+    ///
+    /// The field name has to start with an ASCII letter or digit, followed by printable
+    /// ASCII characters other than `:`.
+    pub fn set(&mut self, field: &str, value: &str) -> Result<(), InvalidFieldName> {
+        if !is_valid_field_name(field) {
+            return Err(InvalidFieldName(field.to_string()));
+        }
         self.0.set(field, value);
+        Ok(())
     }
 
     /// Remove a field, if present.
@@ -2651,6 +2681,31 @@ Enhances: shiny
     }
 
     #[test]
+    fn test_set_invalid_field_name() {
+        let mut desc: RDescription = "Package: foo\n".parse().unwrap();
+        for name in [
+            "", "Bad:Name", "Bad Name", "-Foo", "_Foo", "Fo\u{e9}", "Foo\n",
+        ] {
+            assert_eq!(
+                desc.set(name, "x"),
+                Err(InvalidFieldName(name.to_string())),
+                "{name:?}"
+            );
+        }
+        assert_eq!(desc.to_string(), "Package: foo\n");
+
+        for name in [
+            "Authors@R",
+            "Date/Publication",
+            "Config/testthat/edition",
+            "9x",
+        ] {
+            desc.set(name, "x").unwrap();
+            assert_eq!(desc.get(name), Some("x".to_string()), "{name:?}");
+        }
+    }
+
+    #[test]
     fn test_lazy_data() {
         for (value, expected) in [
             ("true", true),
@@ -3019,7 +3074,7 @@ License_restricts_use: no
     fn test_generic_field_access() {
         let mut desc: RDescription = "Package: foo\nX-Custom: bar\n".parse().unwrap();
         assert_eq!(desc.get("x-custom"), Some("bar".to_string()));
-        desc.set("X-Custom", "baz");
+        desc.set("X-Custom", "baz").unwrap();
         assert_eq!(desc.get("X-Custom"), Some("baz".to_string()));
         desc.remove("X-Custom");
         assert_eq!(desc.get("X-Custom"), None);
