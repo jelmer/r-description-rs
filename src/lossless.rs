@@ -35,6 +35,9 @@ pub use deb822_lossless::{PositionedParseError, TextRange};
 pub use relations::{Relation, Relations, Version};
 use rowan::ast::AstNode;
 
+mod builder;
+pub use builder::{BuildError, RDescriptionBuilder};
+
 /// R DESCRIPTION file
 ///
 /// The fields live in the first paragraph of the parsed file; anything around it, such as
@@ -327,6 +330,11 @@ impl RDescription {
     /// Create a new empty R DESCRIPTION file
     pub fn new() -> Self {
         Self(Paragraph::new())
+    }
+
+    /// Start building a new DESCRIPTION file.
+    pub fn builder() -> RDescriptionBuilder {
+        RDescriptionBuilder::new()
     }
 
     /// Parse the value of `field` if it is present.
