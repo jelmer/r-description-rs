@@ -138,6 +138,12 @@ pub enum FieldErrorKind {
 
     /// The value is not a valid version.
     Version(crate::VersionParseError),
+
+    /// The value is not a valid `OS_type`.
+    OsType(crate::InvalidOsType),
+
+    /// The value is not a valid `Priority`.
+    Priority(crate::InvalidPriority),
 }
 
 impl FieldErrorKind {
@@ -147,7 +153,12 @@ impl FieldErrorKind {
         match self {
             Self::Relations(e) => e.errors().first().map(|e| e.range),
             // TODO: report the position of the invalid remote
-            Self::Url { .. } | Self::Logical(_) | Self::Remotes(_) | Self::Version(_) => None,
+            Self::Url { .. }
+            | Self::Logical(_)
+            | Self::Remotes(_)
+            | Self::Version(_)
+            | Self::OsType(_)
+            | Self::Priority(_) => None,
         }
     }
 }
@@ -162,6 +173,8 @@ impl std::fmt::Display for FieldErrorKind {
             }
             Self::Remotes(e) => e.fmt(f),
             Self::Version(e) => e.fmt(f),
+            Self::OsType(e) => e.fmt(f),
+            Self::Priority(e) => e.fmt(f),
         }
     }
 }
@@ -201,6 +214,8 @@ impl std::error::Error for FieldError {
             FieldErrorKind::Logical(_) => None,
             FieldErrorKind::Remotes(e) => Some(e),
             FieldErrorKind::Version(e) => Some(e),
+            FieldErrorKind::OsType(e) => Some(e),
+            FieldErrorKind::Priority(e) => Some(e),
         }
     }
 }
@@ -681,23 +696,23 @@ impl RDescription {
     }
 
     /// Return the priority, e.g. "base" or "recommended"
-    pub fn priority(&self) -> Option<String> {
-        self.0.get("Priority")
+    pub fn priority(&self) -> Result<Option<crate::Priority>, FieldError> {
+        self.parse_field("Priority", |s| s.parse().map_err(FieldErrorKind::Priority))
     }
 
     /// Set the priority
-    pub fn set_priority(&mut self, priority: &str) {
-        self.0.set("Priority", priority);
+    pub fn set_priority(&mut self, priority: crate::Priority) {
+        self.0.set("Priority", &priority.to_string());
     }
 
     /// Return the operating system type the package is restricted to, e.g. "unix"
-    pub fn os_type(&self) -> Option<String> {
-        self.0.get("OS_type")
+    pub fn os_type(&self) -> Result<Option<crate::OsType>, FieldError> {
+        self.parse_field("OS_type", |s| s.parse().map_err(FieldErrorKind::OsType))
     }
 
     /// Set the OS type
-    pub fn set_os_type(&mut self, os_type: &str) {
-        self.0.set("OS_type", os_type);
+    pub fn set_os_type(&mut self, os_type: crate::OsType) {
+        self.0.set("OS_type", &os_type.to_string());
     }
 
     /// Return the package type, e.g. "Package" or "Translation"
@@ -2714,6 +2729,42 @@ Enhances: shiny
     }
 
     #[test]
+    fn test_os_type_and_priority() {
+        let mut desc: RDescription = "Package: foo\n".parse().unwrap();
+        assert_eq!(desc.os_type(), Ok(None));
+        assert_eq!(desc.priority(), Ok(None));
+        desc.set_os_type(crate::OsType::Windows);
+        desc.set_priority(crate::Priority::Base);
+        assert_eq!(
+            desc.to_string(),
+            "Package: foo\nOS_type: windows\nPriority: base\n"
+        );
+        assert_eq!(desc.os_type(), Ok(Some(crate::OsType::Windows)));
+        assert_eq!(desc.priority(), Ok(Some(crate::Priority::Base)));
+    }
+
+    #[test]
+    fn test_os_type_and_priority_invalid() {
+        let s = "Package: foo\nOS_type: mac\nPriority: high\n";
+        let desc: RDescription = s.parse().unwrap();
+        let err = desc.os_type().unwrap_err();
+        assert_eq!(
+            err.kind(),
+            &FieldErrorKind::OsType(crate::InvalidOsType("mac".to_string()))
+        );
+        assert_eq!(&s[err.range()], "mac");
+        assert_eq!(
+            err.to_string(),
+            "invalid OS_type field: expected unix or windows, got \"mac\""
+        );
+        let err = desc.priority().unwrap_err();
+        assert_eq!(
+            err.kind(),
+            &FieldErrorKind::Priority(crate::InvalidPriority("high".to_string()))
+        );
+    }
+
+    #[test]
     fn test_lazy_data() {
         for (value, expected) in [
             ("true", true),
@@ -3042,8 +3093,8 @@ License_restricts_use: no
         let desc: RDescription = s.parse().unwrap();
         assert_eq!(desc.author(), Some("A. Person".to_string()));
         assert_eq!(desc.copyright(), Some("The authors".to_string()));
-        assert_eq!(desc.priority(), Some("recommended".to_string()));
-        assert_eq!(desc.os_type(), Some("unix".to_string()));
+        assert_eq!(desc.priority(), Ok(Some(crate::Priority::Recommended)));
+        assert_eq!(desc.os_type(), Ok(Some(crate::OsType::Unix)));
         assert_eq!(desc.package_type(), Some("Package".to_string()));
         assert_eq!(desc.contact(), Some("help@example.com".to_string()));
         assert_eq!(desc.mailing_list(), Some("list@example.com".to_string()));

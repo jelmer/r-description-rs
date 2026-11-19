@@ -14,6 +14,9 @@ pub use lossy::RDescription;
 mod version;
 pub use version::{Version, VersionParseError};
 
+mod scalar;
+pub use scalar::{InvalidOsType, InvalidPriority, OsType, Priority};
+
 pub mod remotes;
 pub use remotes::{
     BiocCredentials, BiocRepository, GitReference, GitRepository, HostedRepository, Remote,
